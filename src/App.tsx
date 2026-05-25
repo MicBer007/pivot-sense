@@ -1,8 +1,10 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import './App.css';
+import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
+type SessionState = 'loading' | 'signed-out' | 'signed-in';
 
 type TabConfig = {
   id: TabId;
@@ -42,16 +44,10 @@ const tabs: TabConfig[] = [
   },
 ];
 
-const navLinks = [
-  { href: '#overview', label: 'How it works' },
-  { href: '#overview', label: 'Pricing' },
-  { href: '#overview', label: 'Stories' },
-  { href: '#overview', label: 'Sign in' },
-];
-
 const MAPBOX_ACCESS_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN?.trim();
 const MAPBOX_STYLE_URL =
-  import.meta.env.VITE_MAPBOX_STYLE_URL?.trim() || 'mapbox://styles/mapbox/satellite-streets-v12';
+  import.meta.env.VITE_MAPBOX_STYLE_URL?.trim() ||
+  'mapbox://styles/mapbox/satellite-streets-v12';
 const DEFAULT_CENTER: [number, number] = [
   Number(import.meta.env.VITE_MAPBOX_DEFAULT_LNG ?? 24.6727),
   Number(import.meta.env.VITE_MAPBOX_DEFAULT_LAT ?? -28.4793),
@@ -102,7 +98,6 @@ function FieldMapPanel() {
       });
 
       mapInstanceRef.current = map;
-
       map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
       map.on('load', () => {
@@ -111,10 +106,10 @@ function FieldMapPanel() {
         setErrorMessage(null);
       });
 
-      map.on('error', (e) => {
+      map.on('error', (event) => {
         if (cancelled) return;
         setStatus('error');
-        setErrorMessage(e.error?.message ?? 'Mapbox failed to load.');
+        setErrorMessage(event.error?.message ?? 'Mapbox failed to load.');
       });
     } catch (error) {
       setStatus('error');
@@ -136,8 +131,8 @@ function FieldMapPanel() {
         <span className="panel-tag">Mapbox</span>
         <h2>Field map canvas</h2>
         <p>
-          This screen only handles the map bootstrapping. Boundary drawing can
-          be added later on top of this container.
+          This screen only handles the map bootstrapping. Boundary drawing can be
+          added later on top of this container.
         </p>
       </div>
 
@@ -185,7 +180,9 @@ function PlaceholderPanel({ tab }: { tab: TabConfig }) {
   return (
     <section className="placeholder-panel">
       <div className="panel-copy">
-        <span className="panel-tag">Tab {tabs.findIndex(({ id }) => id === tab.id) + 1}</span>
+        <span className="panel-tag">
+          Tab {tabs.findIndex(({ id }) => id === tab.id) + 1}
+        </span>
         <h2>{tab.title}</h2>
         <p>{tab.description}</p>
       </div>
@@ -196,7 +193,170 @@ function PlaceholderPanel({ tab }: { tab: TabConfig }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sessionState, setSessionState] = useState<SessionState>('loading');
+  const [email, setEmail] = useState('');
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [sendingMagicLink, setSendingMagicLink] = useState(false);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
+
+  useEffect(() => {
+    if (!supabaseConfigured || !supabase) {
+      setSessionState('signed-out');
+      return;
+    }
+
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+
+      if (error) {
+        setAuthError(error.message);
+        setSessionState('signed-out');
+        return;
+      }
+
+      setSessionState(data.session ? 'signed-in' : 'signed-out');
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      setSessionState(session ? 'signed-in' : 'signed-out');
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleMagicLinkSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabaseConfigured || !supabase) {
+      setAuthError('Supabase auth is not configured yet.');
+      return;
+    }
+
+    setSendingMagicLink(true);
+    setAuthError(null);
+    setAuthMessage(null);
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: window.location.origin,
+      },
+    });
+
+    setSendingMagicLink(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setAuthMessage('Magic link sent. Check your email to open PivotSense.');
+  }
+
+  async function handleSignOut() {
+    if (!supabase) return;
+
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setAuthMessage(null);
+    setAuthError(null);
+  }
+
+  if (sessionState === 'loading') {
+    return (
+      <div className="page auth-page" id="top">
+        <main className="auth-shell">
+          <section className="auth-card">
+            <Logo />
+            <div className="auth-copy">
+              <span className="badge">PivotSense</span>
+              <h1>Checking session</h1>
+              <p>Connecting to Supabase authentication.</p>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (sessionState === 'signed-out') {
+    return (
+      <div className="page auth-page" id="top">
+        <main className="auth-shell">
+          <section className="auth-card" data-testid="auth-card">
+            <Logo />
+            <div className="auth-copy">
+              <span className="badge">PivotSense</span>
+              <h1>Sign in to view your fields</h1>
+              <p>
+                Use a magic link sent to your email. Your signed-in user session
+                is what the field RLS policies rely on.
+              </p>
+            </div>
+
+            {!supabaseConfigured ? (
+              <div className="auth-state-card" data-testid="supabase-setup-needed">
+                <h3>Supabase setup needed</h3>
+                <p>
+                  Add <code>VITE_SUPABASE_URL</code> and{' '}
+                  <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> to your local Vite env.
+                </p>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={handleMagicLinkSubmit}>
+                <label className="auth-label" htmlFor="email">
+                  Email address
+                </label>
+                <input
+                  id="email"
+                  className="auth-input"
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  placeholder="farmer@example.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                />
+                <button
+                  type="submit"
+                  className="btn btn-primary auth-submit"
+                  disabled={sendingMagicLink}
+                >
+                  {sendingMagicLink ? 'Sending...' : 'Send magic link'}
+                </button>
+              </form>
+            )}
+
+            {authMessage ? (
+              <p className="auth-feedback auth-feedback-success" aria-live="polite">
+                {authMessage}
+              </p>
+            ) : null}
+
+            {authError ? (
+              <p className="auth-feedback auth-feedback-error" aria-live="polite">
+                {authError}
+              </p>
+            ) : null}
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="page" id="top">
@@ -217,13 +377,17 @@ export default function App() {
               </button>
             ))}
           </nav>
-
+          <div className="nav-cta">
+            <button type="button" className="btn btn-secondary" onClick={() => void handleSignOut()}>
+              Sign out
+            </button>
+          </div>
           <button
             type="button"
             className="nav-toggle"
             aria-expanded={menuOpen}
             aria-controls="mobile-menu"
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={() => setMenuOpen((value) => !value)}
           >
             <span className="sr-only">Toggle menu</span>
             <span className="nav-toggle-bar" />
@@ -248,6 +412,16 @@ export default function App() {
                 {tab.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="btn btn-secondary mobile-cta mobile-menu-button"
+              onClick={() => {
+                setMenuOpen(false);
+                void handleSignOut();
+              }}
+            >
+              Sign out
+            </button>
           </div>
         ) : null}
       </header>
@@ -259,8 +433,9 @@ export default function App() {
               <span className="badge">PivotSense</span>
               <h1>Farmer workspace</h1>
               <p>
-                Four-tab mobile-ready shell with a dedicated field map screen for
-                Mapbox integration.
+                Signed-in workspace for each farmer, with field data protected by
+                Supabase RLS and a dedicated field map screen for Mapbox
+                integration.
               </p>
             </div>
           </section>

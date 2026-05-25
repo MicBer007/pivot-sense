@@ -1,40 +1,27 @@
 import { test, expect } from './web-fixture';
 
-test('navbar shows brand and main links', async ({ page }) => {
+test('signed-out landing shows brand and auth prompt', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(page.getByRole('link', { name: 'PivotSense home' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Sign in to view your fields' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Email address')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Send magic link' })).toBeVisible();
+});
+
+test('signed-out shell explains RLS-backed login flow', async ({ page }) => {
   await page.goto('/');
 
   await expect(
-    page.getByRole('banner').getByRole('link', { name: 'PivotSense home' }),
+    page.getByText('Your signed-in user session is what the field RLS policies rely on.'),
   ).toBeVisible();
-
-  const nav = page.getByRole('navigation', { name: 'Main' });
-  await expect(nav.getByRole('link', { name: 'How it works' })).toBeVisible();
-  await expect(nav.getByRole('link', { name: 'Pricing' })).toBeVisible();
-  await expect(nav.getByRole('link', { name: 'Stories' })).toBeVisible();
-  await expect(nav.getByRole('link', { name: 'Sign in' })).toBeVisible();
-});
-
-test('app renders farmer workspace shell', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Farmer workspace' })).toBeVisible();
   await expect(page.getByText('PivotSense').first()).toBeVisible();
 });
 
-test('shows four main tabs', async ({ page }) => {
+test('supabase auth is configured in the browser app', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('button', { name: 'Overview' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Insights' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Alerts' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Fields' })).toBeVisible();
-});
-
-test('fields tab shows maps setup instructions without an api key', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Fields' }).click();
-
-  await expect(page.getByTestId('maps-setup-needed')).toBeVisible();
-  await expect(page.getByText('VITE_GOOGLE_MAPS_API_KEY')).toBeVisible();
+  await expect(page.getByTestId('supabase-setup-needed')).toHaveCount(0);
 });
