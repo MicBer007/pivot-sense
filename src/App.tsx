@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import mapboxgl from 'mapbox-gl';
 import './App.css';
-import { loadGoogleMaps } from './googleMaps';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 
@@ -38,7 +38,7 @@ const tabs: TabConfig[] = [
     label: 'Fields',
     title: 'Field boundaries',
     description:
-      'Google Maps is loaded here so farmers can eventually define their field edges.',
+      'Mapbox is loaded here so farmers can eventually define their field edges.',
   },
 ];
 
@@ -49,13 +49,14 @@ const navLinks = [
   { href: '#overview', label: 'Sign in' },
 ];
 
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim();
-const GOOGLE_MAP_ID = import.meta.env.VITE_GOOGLE_MAP_ID?.trim();
-const DEFAULT_CENTER = {
-  lat: Number(import.meta.env.VITE_GOOGLE_MAPS_DEFAULT_LAT ?? -28.4793),
-  lng: Number(import.meta.env.VITE_GOOGLE_MAPS_DEFAULT_LNG ?? 24.6727),
-};
-const DEFAULT_ZOOM = Number(import.meta.env.VITE_GOOGLE_MAPS_DEFAULT_ZOOM ?? 5);
+const MAPBOX_ACCESS_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const MAPBOX_STYLE_URL =
+  import.meta.env.VITE_MAPBOX_STYLE_URL?.trim() || 'mapbox://styles/mapbox/satellite-streets-v12';
+const DEFAULT_CENTER: [number, number] = [
+  Number(import.meta.env.VITE_MAPBOX_DEFAULT_LNG ?? 24.6727),
+  Number(import.meta.env.VITE_MAPBOX_DEFAULT_LAT ?? -28.4793),
+];
+const DEFAULT_ZOOM = Number(import.meta.env.VITE_MAPBOX_DEFAULT_ZOOM ?? 5);
 
 function Logo() {
   return (
@@ -74,64 +75,64 @@ function Logo() {
 function FieldMapPanel() {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
-    GOOGLE_MAPS_API_KEY ? 'loading' : 'idle',
+    MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!GOOGLE_MAPS_API_KEY || !mapRef.current) {
+    if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
       return;
     }
 
-    const apiKey = GOOGLE_MAPS_API_KEY;
+    mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
+
     let cancelled = false;
+    setStatus('loading');
 
-    async function setupMap() {
-      try {
-        setStatus('loading');
-        const maps = await loadGoogleMaps(apiKey);
+    try {
+      const map = new mapboxgl.Map({
+        container: mapRef.current,
+        style: MAPBOX_STYLE_URL,
+        center: DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+        attributionControl: true,
+      });
 
-        if (cancelled || !mapRef.current) {
-          return;
-        }
+      mapInstanceRef.current = map;
 
-        new maps.Map(mapRef.current, {
-          center: DEFAULT_CENTER,
-          zoom: DEFAULT_ZOOM,
-          mapId: GOOGLE_MAP_ID || undefined,
-          mapTypeControl: true,
-          fullscreenControl: false,
-          streetViewControl: false,
-        });
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
+      map.on('load', () => {
+        if (cancelled) return;
         setStatus('ready');
         setErrorMessage(null);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
+      });
 
+      map.on('error', (e) => {
+        if (cancelled) return;
         setStatus('error');
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : 'Google Maps failed to load.',
-        );
-      }
+        setErrorMessage(e.error?.message ?? 'Mapbox failed to load.');
+      });
+    } catch (error) {
+      setStatus('error');
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Mapbox failed to initialise.',
+      );
     }
-
-    void setupMap();
 
     return () => {
       cancelled = true;
+      mapInstanceRef.current?.remove();
+      mapInstanceRef.current = null;
     };
   }, []);
 
   return (
     <section className="map-panel">
       <div className="panel-copy">
-        <span className="panel-tag">Google Maps</span>
+        <span className="panel-tag">Mapbox</span>
         <h2>Field map canvas</h2>
         <p>
           This screen only handles the map bootstrapping. Boundary drawing can
@@ -139,21 +140,21 @@ function FieldMapPanel() {
         </p>
       </div>
 
-      {!GOOGLE_MAPS_API_KEY ? (
+      {!MAPBOX_ACCESS_TOKEN ? (
         <div className="map-state-card" data-testid="maps-setup-needed">
-          <h3>Google Maps setup needed</h3>
+          <h3>Mapbox setup needed</h3>
           <p>
-            Add <code>VITE_GOOGLE_MAPS_API_KEY</code> to your local Vite env and
-            enable the Maps JavaScript API in Google Cloud.
+            Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
+            (use a public <code>pk.*</code> token from your Mapbox account).
           </p>
           <p>
-            Optional: set <code>VITE_GOOGLE_MAP_ID</code> if you want a custom
-            styled map.
+            Optional: <code>VITE_MAPBOX_STYLE_URL</code> to override the default
+            satellite-streets style.
           </p>
         </div>
       ) : null}
 
-      {GOOGLE_MAPS_API_KEY ? (
+      {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
           <div className="map-status-row">
             <span className={`status-pill status-${status}`}>
@@ -162,8 +163,8 @@ function FieldMapPanel() {
               {status === 'error' && 'Map error'}
             </span>
             <span className="map-meta" aria-live="polite">
-              {status === 'loading' && 'Connecting to Google Maps...'}
-              {status === 'ready' && 'Google Maps is active.'}
+              {status === 'loading' && 'Connecting to Mapbox...'}
+              {status === 'ready' && 'Mapbox is active.'}
               {status === 'error' && errorMessage}
             </span>
           </div>
@@ -171,7 +172,7 @@ function FieldMapPanel() {
             id={mapId}
             ref={mapRef}
             className="map-canvas"
-            data-testid="google-map-canvas"
+            data-testid="mapbox-canvas"
           />
         </div>
       ) : null}
@@ -250,7 +251,7 @@ export default function App() {
               <h1>Farmer workspace</h1>
               <p>
                 Four-tab mobile-ready shell with a dedicated field map screen for
-                Google Maps integration.
+                Mapbox integration.
               </p>
             </div>
           </section>
