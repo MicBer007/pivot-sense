@@ -28,16 +28,14 @@ test('signed-out landing shows brand and auth prompt', async ({ page }) => {
   ).toBeVisible();
 });
 
-test('signed-out shell explains RLS-backed login flow', async ({ page }) => {
+test('signed-out shell stays minimal', async ({ page }) => {
   await page.goto('/');
 
+  await expect(page.getByText('PivotSense').first()).toBeVisible();
+  await expect(page.getByText('Current pilot limitation')).toHaveCount(0);
   await expect(
     page.getByText('The browser keeps the signed-in session cached until you sign out.'),
-  ).toBeVisible();
-  await expect(
-    page.getByText('the combination of name and surname needs to be unique', { exact: false }),
-  ).toBeVisible();
-  await expect(page.getByText('PivotSense').first()).toBeVisible();
+  ).toHaveCount(0);
 });
 
 test('supabase auth is configured in the browser app', async ({ page }) => {

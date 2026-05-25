@@ -286,10 +286,9 @@ p {
 }
 
 .auth-copy {
-  margin-top: 1.5rem;
+  margin-top: 1.25rem;
 }
 
-.auth-copy p,
 .hero-copy p {
   margin: 0.9rem 0 0;
   font-size: 1rem;
@@ -312,18 +311,28 @@ p {
   padding: 0.75rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 0.8rem;
-  background: #ffffff;
-  color: var(--text-muted);
+  background: #f3f6f3;
+  color: var(--text);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.auth-mode-button:hover {
+  border-color: #cbd5cd;
+  background: #edf3ee;
 }
 
 .auth-mode-button.is-active {
   color: #ffffff;
   background: var(--green);
   border-color: var(--green);
+  box-shadow: 0 8px 18px rgba(47, 125, 59, 0.18);
 }
 
 .auth-label {
@@ -456,6 +465,13 @@ p {
   color: var(--text-muted);
 }
 
+.field-panel-copy {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+}
+
 .placeholder-panel,
 .map-panel {
   margin-top: 1.25rem;
@@ -487,6 +503,35 @@ p {
 
 .map-shell {
   margin-top: 1rem;
+}
+
+.field-creation-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, #fbfdfb 0%, #f4f8f4 100%);
+}
+
+.field-creation-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.draw-mode-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.draw-help {
+  font-size: 0.95rem;
+}
+
+.field-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
 }
 
 .map-status-row {
@@ -560,5 +605,14 @@ code {
 
   .map-canvas {
     min-height: 21rem;
+  }
+
+  .field-panel-copy {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .draw-mode-group {
+    grid-template-columns: 1fr;
   }
 }
