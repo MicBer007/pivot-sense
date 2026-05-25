@@ -120,38 +120,43 @@ p {
 }
 
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  background: var(--green);
-  color: #ffffff;
+  display: block;
+  object-fit: contain;
 }
 
 .nav-links {
   display: flex;
-  gap: 2rem;
+  gap: 0.5rem;
   align-items: center;
   flex: 1;
   justify-content: center;
 }
 
-.nav-links a {
-  color: var(--text-muted);
+.nav-tab {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0.5rem 0.95rem;
+  font: inherit;
   font-size: 0.95rem;
-  font-weight: 500;
-  transition: color 120ms ease;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
-.nav-links a:hover {
+.nav-tab:hover {
   color: var(--text);
+  background: var(--bg-muted);
 }
 
-.nav-cta {
-  display: flex;
-  align-items: center;
+.nav-tab.is-active {
+  color: #ffffff;
+  background: var(--green);
+  border-color: var(--green);
 }
 
 .nav-toggle {
@@ -190,9 +195,22 @@ p {
   font-weight: 500;
 }
 
-.mobile-menu .mobile-cta {
-  margin-top: 0.5rem;
-  align-self: flex-start;
+.mobile-tab {
+  text-align: left;
+  padding: 0.7rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mobile-tab.is-active {
+  color: #ffffff;
+  background: var(--green);
+  border-color: var(--green);
 }
 
 /* ---------- Buttons ---------- */
@@ -272,36 +290,6 @@ p {
   padding: 0.32rem 0.7rem;
   color: var(--green-dark);
   background: var(--green-soft);
-}
-
-.tab-bar {
-  margin: 1rem 0 0;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-
-.tab-button {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.7rem 0.75rem;
-  font: inherit;
-  font-weight: 600;
-  color: var(--text-muted);
-  background: #ffffff;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-
-.tab-button:hover {
-  color: var(--text);
-  border-color: var(--text-muted);
-}
-
-.tab-button.is-active {
-  color: #ffffff;
-  background: var(--green);
-  border-color: var(--green);
 }
 
 .content-card {
@@ -409,8 +397,7 @@ code {
 /* ---------- Responsive ---------- */
 
 @media (max-width: 860px) {
-  .nav-links,
-  .nav-cta {
+  .nav-links {
     display: none;
   }
 
@@ -431,10 +418,6 @@ code {
   .hero-card,
   .content-card {
     padding: 1.1rem;
-  }
-
-  .tab-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .map-canvas {
