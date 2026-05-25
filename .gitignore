@@ -7,3 +7,6 @@ test-results
 *.log
 tsconfig.tsbuildinfo
 .mcp.json
+.env
+.env.*
+!.env.example
