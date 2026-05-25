@@ -1,0 +1,38 @@
+import { test, expect } from './web-fixture';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+test('capture add field flow', async ({ page }) => {
+  const suffix = Date.now().toString().slice(-6);
+  const firstName = `Field${suffix}`;
+  const surname = `Demo${suffix}`;
+  const password = 'pivotpass123';
+
+  await page.goto('/');
+  await page.getByLabel('Name', { exact: true }).fill(firstName);
+  await page.getByLabel('Surname', { exact: true }).fill(surname);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByLabel('Confirm password', { exact: true }).fill(password);
+  await page
+    .locator('form')
+    .getByRole('button', { name: 'Create account', exact: true })
+    .click();
+
+  await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole('button', { name: 'Add field', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add field', exact: true }).click();
+  await page.getByLabel('Field name', { exact: true }).fill('North Pivot');
+  await expect(page.getByRole('button', { name: 'Circle mode', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Free mode', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirm boundary', exact: true })).toBeVisible();
+
+  const dir = resolve('screenshots');
+  mkdirSync(dir, { recursive: true });
+  await page.screenshot({
+    path: resolve(dir, 'field-flow.png'),
+    fullPage: true,
+  });
+});

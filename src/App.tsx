@@ -26,6 +26,11 @@ type FieldRecord = {
   fieldName: string;
   boundary: PolygonGeometry;
 };
+type RpcFieldRow = {
+  id: string;
+  field_name: string;
+  boundary: unknown;
+};
 
 type TabConfig = {
   id: TabId;
@@ -165,14 +170,6 @@ function parseBoundary(value: unknown): PolygonGeometry | null {
   }
 
   return null;
-}
-
-function polygonToWkt(polygon: PolygonGeometry) {
-  const ring = polygon.coordinates[0]
-    .map(([lng, lat]) => `${lng} ${lat}`)
-    .join(', ');
-
-  return `POLYGON((${ring}))`;
 }
 
 function getPolygonBounds(polygon: PolygonGeometry) {
@@ -450,10 +447,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
     setFieldsLoading(true);
     setFieldError(null);
 
-    const { data, error } = await supabase
-      .from('fields')
-      .select('id, field_name, boundary')
-      .order('field_name', { ascending: true });
+    const { data, error } = await supabase.rpc('get_my_fields');
 
     if (error) {
       setFieldError(error.message);
@@ -461,7 +455,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
       return;
     }
 
-    const parsedFields = (data ?? [])
+    const parsedFields = ((data ?? []) as RpcFieldRow[])
       .map((record) => {
         const boundary = parseBoundary(record.boundary);
         if (!boundary) return null;
@@ -472,7 +466,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
           boundary,
         } satisfies FieldRecord;
       })
-      .filter((field): field is FieldRecord => Boolean(field));
+      .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field));
 
     setFields(parsedFields);
     setFieldsLoading(false);
@@ -498,9 +492,9 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
     setFieldError(null);
     setFieldMessage(null);
 
-    const { error } = await supabase.from('fields').insert({
-      field_name: fieldNameDraft.trim(),
-      boundary: polygonToWkt(draftPolygon),
+    const { error } = await supabase.rpc('create_field', {
+      input_field_name: fieldNameDraft.trim(),
+      input_boundary: draftPolygon,
     });
 
     setSavingField(false);
@@ -613,6 +607,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
   useEffect(() => {
     const activeMap = mapInstanceRef.current;
     if (!activeMap || status !== 'ready') return;
+    const map = activeMap;
 
     function handleMapClick(event: mapboxgl.MapMouseEvent) {
       if (!isAddingField) return;
@@ -628,7 +623,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
         if (freePolygonComplete) return;
 
         if (freePoints.length >= 3) {
-          const firstPoint = activeMap.project(freePoints[0]);
+          const firstPoint = map.project(freePoints[0]);
           const clickDistance = Math.hypot(firstPoint.x - event.point.x, firstPoint.y - event.point.y);
           if (clickDistance <= 18) {
             setFreePolygonComplete(true);
@@ -673,12 +668,12 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
       setCircleRadiusMeters(radius);
     }
 
-    activeMap.on('click', handleMapClick);
-    activeMap.on('mousemove', handleMouseMove);
+    map.on('click', handleMapClick);
+    map.on('mousemove', handleMouseMove);
 
     return () => {
-      activeMap.off('click', handleMapClick);
-      activeMap.off('mousemove', handleMouseMove);
+      map.off('click', handleMapClick);
+      map.off('mousemove', handleMouseMove);
     };
   }, [
     status,
