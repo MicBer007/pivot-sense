@@ -20,17 +20,7 @@ this same codebase. Stay focused on PivotSense work.
 
 ## Supabase
 
-The project is wired to a Supabase project (ref `hsadpnvviijwtpqxlldy`) via
-the official Supabase MCP server. The config lives in `.mcp.json` at the repo
-root and runs in read-write mode.
-
-To use it, each dev needs a Supabase Personal Access Token exported as
-`SUPABASE_ACCESS_TOKEN` in their shell environment before launching Claude
-Code:
-
-- Create a token at https://supabase.com/dashboard/account/tokens
-- PowerShell (current session): `$env:SUPABASE_ACCESS_TOKEN = "sbp_..."`
-- PowerShell (persistent): `setx SUPABASE_ACCESS_TOKEN "sbp_..."` (restart the shell after)
-- bash/zsh: `export SUPABASE_ACCESS_TOKEN=sbp_...` in your shell profile
-
-Never commit the token. `.mcp.json` references it via `${SUPABASE_ACCESS_TOKEN}`.
+The project uses the official Supabase MCP server, configured via `.mcp.json`
+at the repo root. **`.mcp.json` is gitignored** because it contains a hardcoded
+access token — ask a teammate to share their copy out-of-band (DM, password
+manager, etc). Drop it at the repo root and restart Claude Code.
