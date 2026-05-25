@@ -20,7 +20,4 @@ this same codebase. Stay focused on PivotSense work.
 
 ## Supabase
 
-The project uses the official Supabase MCP server, configured via `.mcp.json`
-at the repo root. **`.mcp.json` is gitignored** because it contains a hardcoded
-access token — ask a teammate to share their copy out-of-band (DM, password
-manager, etc). Drop it at the repo root and restart Claude Code.
+You have access to the database MCP server.
