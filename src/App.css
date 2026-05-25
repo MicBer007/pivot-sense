@@ -383,6 +383,10 @@ p {
   border-color: rgba(127, 29, 29, 0.12);
 }
 
+.account-note {
+  margin-top: 0.75rem;
+}
+
 .hero-card {
   padding: 1.75rem;
   display: grid;

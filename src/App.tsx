@@ -5,7 +5,7 @@ import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 type SessionState = 'loading' | 'signed-out' | 'signed-in';
-type AuthMode = 'magic-link' | 'password';
+type AuthMode = 'create-account' | 'sign-in';
 
 type TabConfig = {
   id: TabId;
@@ -54,6 +54,25 @@ const DEFAULT_CENTER: [number, number] = [
   Number(import.meta.env.VITE_MAPBOX_DEFAULT_LAT ?? -28.4793),
 ];
 const DEFAULT_ZOOM = Number(import.meta.env.VITE_MAPBOX_DEFAULT_ZOOM ?? 5);
+
+function normaliseIdentityPart(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '')
+    .replace(/\.{2,}/g, '.');
+}
+
+function buildSyntheticEmail(firstName: string, surname: string) {
+  const safeFirstName = normaliseIdentityPart(firstName) || 'farmer';
+  const safeSurname = normaliseIdentityPart(surname) || 'account';
+  return `${safeFirstName}.${safeSurname}@pivotsense.local`;
+}
+
+function buildFullName(firstName: string, surname: string) {
+  return `${firstName.trim()} ${surname.trim()}`.trim();
+}
 
 function Logo() {
   return (
@@ -195,15 +214,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
   const [menuOpen, setMenuOpen] = useState(false);
   const [sessionState, setSessionState] = useState<SessionState>('loading');
-  const [authMode, setAuthMode] = useState<AuthMode>('magic-link');
-  const [email, setEmail] = useState('');
+  const [authMode, setAuthMode] = useState<AuthMode>('create-account');
+  const [firstName, setFirstName] = useState('');
+  const [surname, setSurname] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [currentUserName, setCurrentUserName] = useState('');
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [sendingMagicLink, setSendingMagicLink] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
   const [signingInWithPassword, setSigningInWithPassword] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
 
   useEffect(() => {
@@ -223,6 +243,13 @@ export default function App() {
         return;
       }
 
+      const fullName =
+        data.session?.user.user_metadata.full_name ??
+        buildFullName(
+          data.session?.user.user_metadata.first_name ?? '',
+          data.session?.user.user_metadata.surname ?? '',
+        );
+      setCurrentUserName(fullName);
       setSessionState(data.session ? 'signed-in' : 'signed-out');
     });
 
@@ -230,6 +257,13 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
+      const fullName =
+        session?.user.user_metadata.full_name ??
+        buildFullName(
+          session?.user.user_metadata.first_name ?? '',
+          session?.user.user_metadata.surname ?? '',
+        );
+      setCurrentUserName(fullName);
       setSessionState(session ? 'signed-in' : 'signed-out');
     });
 
@@ -239,7 +273,7 @@ export default function App() {
     };
   }, []);
 
-  async function handleMagicLinkSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!supabaseConfigured || !supabase) {
@@ -247,25 +281,53 @@ export default function App() {
       return;
     }
 
-    setSendingMagicLink(true);
+    if (password.length < 8) {
+      setAuthError('Use at least 8 characters for the password.');
+      return;
+    }
+
+    if (password !== passwordConfirm) {
+      setAuthError('Passwords do not match.');
+      return;
+    }
+
+    const syntheticEmail = buildSyntheticEmail(firstName, surname);
+    const fullName = buildFullName(firstName, surname);
+
+    setCreatingAccount(true);
     setAuthError(null);
     setAuthMessage(null);
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
+    const { data, error } = await supabase.auth.signUp({
+      email: syntheticEmail,
+      password,
       options: {
-        emailRedirectTo: window.location.origin,
+        data: {
+          first_name: firstName.trim(),
+          surname: surname.trim(),
+          full_name: fullName,
+        },
       },
     });
 
-    setSendingMagicLink(false);
+    setCreatingAccount(false);
 
     if (error) {
       setAuthError(error.message);
       return;
     }
 
-    setAuthMessage('Magic link sent. Check your email to open PivotSense.');
+    if (!data.session) {
+      setAuthError(
+        'Signup created an account but did not create a live session. Check whether email confirmation is still enabled in Supabase Auth.',
+      );
+      return;
+    }
+
+    setPassword('');
+    setPasswordConfirm('');
+    setCurrentUserName(fullName);
+    setAuthMessage('Account created. This browser will keep the session cached.');
   }
 
   async function handlePasswordSignIn(event: FormEvent<HTMLFormElement>) {
@@ -280,8 +342,10 @@ export default function App() {
     setAuthError(null);
     setAuthMessage(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+    const syntheticEmail = buildSyntheticEmail(firstName, surname);
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: syntheticEmail,
       password,
     });
 
@@ -293,42 +357,12 @@ export default function App() {
     }
 
     setPassword('');
-    setAuthMessage('Signed in. This browser will keep the session cached.');
-  }
-
-  async function handlePasswordSetup(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!supabase) return;
-
-    if (password.length < 8) {
-      setAuthError('Use at least 8 characters for the password.');
-      return;
-    }
-
-    if (password !== passwordConfirm) {
-      setAuthError('Passwords do not match.');
-      return;
-    }
-
-    setSavingPassword(true);
-    setAuthError(null);
-    setAuthMessage(null);
-
-    const { error } = await supabase.auth.updateUser({
-      password,
-    });
-
-    setSavingPassword(false);
-
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-
-    setPassword('');
     setPasswordConfirm('');
-    setAuthMessage('Password saved. You can use email and password next time.');
+    const fullName =
+      data.user?.user_metadata.full_name ??
+      buildFullName(firstName, surname);
+    setCurrentUserName(fullName);
+    setAuthMessage('Signed in. This browser will keep the session cached.');
   }
 
   async function handleSignOut() {
@@ -342,6 +376,7 @@ export default function App() {
 
     setAuthMessage(null);
     setAuthError(null);
+    setCurrentUserName('');
   }
 
   if (sessionState === 'loading') {
@@ -371,8 +406,8 @@ export default function App() {
               <span className="badge">PivotSense</span>
               <h1>Sign in to view your fields</h1>
               <p>
-                Your signed-in user session is what the field RLS policies rely
-                on. The browser keeps that session cached until you sign out.
+                Use a plain name, surname, and password flow. The browser keeps
+                the signed-in session cached until you sign out.
               </p>
             </div>
 
@@ -389,73 +424,139 @@ export default function App() {
                 <div className="auth-mode-switch" role="tablist" aria-label="Sign in method">
                   <button
                     type="button"
-                    className={authMode === 'magic-link' ? 'auth-mode-button is-active' : 'auth-mode-button'}
+                    className={authMode === 'create-account' ? 'auth-mode-button is-active' : 'auth-mode-button'}
                     onClick={() => {
-                      setAuthMode('magic-link');
+                      setAuthMode('create-account');
                       setAuthError(null);
                       setAuthMessage(null);
                     }}
                   >
-                    Magic link
+                    Create account
                   </button>
                   <button
                     type="button"
-                    className={authMode === 'password' ? 'auth-mode-button is-active' : 'auth-mode-button'}
+                    className={authMode === 'sign-in' ? 'auth-mode-button is-active' : 'auth-mode-button'}
                     onClick={() => {
-                      setAuthMode('password');
+                      setAuthMode('sign-in');
                       setAuthError(null);
                       setAuthMessage(null);
                     }}
                   >
-                    Password
+                    Sign in
                   </button>
                 </div>
 
-                {authMode === 'magic-link' ? (
-                  <form className="auth-form" onSubmit={handleMagicLinkSubmit}>
-                    <label className="auth-label" htmlFor="email">
-                      Email address
+                <div className="auth-state-card">
+                  <h3>Current pilot limitation</h3>
+                  <p>
+                    For now, the combination of name and surname needs to be
+                    unique for each farmer until we add proper email linking.
+                  </p>
+                </div>
+
+                {authMode === 'create-account' ? (
+                  <form className="auth-form" onSubmit={handleCreateAccount}>
+                    <label className="auth-label" htmlFor="first-name">
+                      Name
                     </label>
                     <input
-                      id="email"
+                      id="first-name"
                       className="auth-input"
-                      type="email"
-                      name="email"
-                      autoComplete="email"
-                      placeholder="farmer@example.com"
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
+                      type="text"
+                      name="first-name"
+                      autoComplete="given-name"
+                      placeholder="Frikkie"
+                      value={firstName}
+                      onChange={(event) => setFirstName(event.target.value)}
                       required
+                    />
+                    <label className="auth-label" htmlFor="surname">
+                      Surname
+                    </label>
+                    <input
+                      id="surname"
+                      className="auth-input"
+                      type="text"
+                      name="surname"
+                      autoComplete="family-name"
+                      placeholder="van der Merwe"
+                      value={surname}
+                      onChange={(event) => setSurname(event.target.value)}
+                      required
+                    />
+                    <label className="auth-label" htmlFor="create-password">
+                      Password
+                    </label>
+                    <input
+                      id="create-password"
+                      className="auth-input"
+                      type="password"
+                      name="password"
+                      autoComplete="new-password"
+                      placeholder="At least 8 characters"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      required
+                      minLength={8}
+                    />
+                    <label className="auth-label" htmlFor="confirm-password">
+                      Confirm password
+                    </label>
+                    <input
+                      id="confirm-password"
+                      className="auth-input"
+                      type="password"
+                      name="confirm-password"
+                      autoComplete="new-password"
+                      placeholder="Repeat the password"
+                      value={passwordConfirm}
+                      onChange={(event) => setPasswordConfirm(event.target.value)}
+                      required
+                      minLength={8}
                     />
                     <button
                       type="submit"
                       className="btn btn-primary auth-submit"
-                      disabled={sendingMagicLink}
+                      disabled={creatingAccount}
                     >
-                      {sendingMagicLink ? 'Sending...' : 'Send magic link'}
+                      {creatingAccount ? 'Creating account...' : 'Create account'}
                     </button>
                   </form>
                 ) : (
                   <form className="auth-form" onSubmit={handlePasswordSignIn}>
-                    <label className="auth-label" htmlFor="email-password">
-                      Email address
+                    <label className="auth-label" htmlFor="sign-in-name">
+                      Name
                     </label>
                     <input
-                      id="email-password"
+                      id="sign-in-name"
                       className="auth-input"
-                      type="email"
-                      name="email"
-                      autoComplete="email"
-                      placeholder="farmer@example.com"
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
+                      type="text"
+                      name="first-name"
+                      autoComplete="given-name"
+                      placeholder="Frikkie"
+                      value={firstName}
+                      onChange={(event) => setFirstName(event.target.value)}
                       required
                     />
-                    <label className="auth-label" htmlFor="password">
+                    <label className="auth-label" htmlFor="sign-in-surname">
+                      Surname
+                    </label>
+                    <input
+                      id="sign-in-surname"
+                      className="auth-input"
+                      type="text"
+                      name="surname"
+                      autoComplete="family-name"
+                      placeholder="van der Merwe"
+                      value={surname}
+                      onChange={(event) => setSurname(event.target.value)}
+                      required
+                    />
+                    <label className="auth-label" htmlFor="sign-in-password">
                       Password
                     </label>
                     <input
-                      id="password"
+                      id="sign-in-password"
                       className="auth-input"
                       type="password"
                       name="password"
@@ -470,7 +571,7 @@ export default function App() {
                       className="btn btn-primary auth-submit"
                       disabled={signingInWithPassword}
                     >
-                      {signingInWithPassword ? 'Signing in...' : 'Sign in with password'}
+                      {signingInWithPassword ? 'Signing in...' : 'Sign in'}
                     </button>
                   </form>
                 )}
@@ -576,50 +677,15 @@ export default function App() {
             </div>
             <div className="account-card">
               <p className="eyebrow">Account</p>
-              <h2>Set a password once</h2>
+              <h2>Signed in</h2>
               <p>
-                Use the magic link once, then save a password here for faster
-                sign-in on new devices. This browser session already stays cached.
+                {currentUserName || 'Farmer'} is signed in. This browser keeps the
+                session cached for easier access on the same device.
               </p>
-              <form className="auth-form" onSubmit={handlePasswordSetup}>
-                <label className="auth-label" htmlFor="new-password">
-                  New password
-                </label>
-                <input
-                  id="new-password"
-                  className="auth-input"
-                  type="password"
-                  name="new-password"
-                  autoComplete="new-password"
-                  placeholder="At least 8 characters"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  minLength={8}
-                />
-                <label className="auth-label" htmlFor="confirm-password">
-                  Confirm password
-                </label>
-                <input
-                  id="confirm-password"
-                  className="auth-input"
-                  type="password"
-                  name="confirm-password"
-                  autoComplete="new-password"
-                  placeholder="Repeat the password"
-                  value={passwordConfirm}
-                  onChange={(event) => setPasswordConfirm(event.target.value)}
-                  required
-                  minLength={8}
-                />
-                <button
-                  type="submit"
-                  className="btn btn-secondary auth-submit"
-                  disabled={savingPassword}
-                >
-                  {savingPassword ? 'Saving...' : 'Save password'}
-                </button>
-              </form>
+              <p className="account-note">
+                Email linking can be added later without changing the field RLS
+                structure.
+              </p>
             </div>
           </section>
 
