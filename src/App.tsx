@@ -5,6 +5,7 @@ import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 type SessionState = 'loading' | 'signed-out' | 'signed-in';
+type AuthMode = 'magic-link' | 'password';
 
 type TabConfig = {
   id: TabId;
@@ -194,10 +195,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
   const [menuOpen, setMenuOpen] = useState(false);
   const [sessionState, setSessionState] = useState<SessionState>('loading');
+  const [authMode, setAuthMode] = useState<AuthMode>('magic-link');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [sendingMagicLink, setSendingMagicLink] = useState(false);
+  const [signingInWithPassword, setSigningInWithPassword] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
 
   useEffect(() => {
@@ -262,6 +268,69 @@ export default function App() {
     setAuthMessage('Magic link sent. Check your email to open PivotSense.');
   }
 
+  async function handlePasswordSignIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabaseConfigured || !supabase) {
+      setAuthError('Supabase auth is not configured yet.');
+      return;
+    }
+
+    setSigningInWithPassword(true);
+    setAuthError(null);
+    setAuthMessage(null);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    setSigningInWithPassword(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setPassword('');
+    setAuthMessage('Signed in. This browser will keep the session cached.');
+  }
+
+  async function handlePasswordSetup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabase) return;
+
+    if (password.length < 8) {
+      setAuthError('Use at least 8 characters for the password.');
+      return;
+    }
+
+    if (password !== passwordConfirm) {
+      setAuthError('Passwords do not match.');
+      return;
+    }
+
+    setSavingPassword(true);
+    setAuthError(null);
+    setAuthMessage(null);
+
+    const { error } = await supabase.auth.updateUser({
+      password,
+    });
+
+    setSavingPassword(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setPassword('');
+    setPasswordConfirm('');
+    setAuthMessage('Password saved. You can use email and password next time.');
+  }
+
   async function handleSignOut() {
     if (!supabase) return;
 
@@ -302,8 +371,8 @@ export default function App() {
               <span className="badge">PivotSense</span>
               <h1>Sign in to view your fields</h1>
               <p>
-                Use a magic link sent to your email. Your signed-in user session
-                is what the field RLS policies rely on.
+                Your signed-in user session is what the field RLS policies rely
+                on. The browser keeps that session cached until you sign out.
               </p>
             </div>
 
@@ -316,29 +385,96 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <form className="auth-form" onSubmit={handleMagicLinkSubmit}>
-                <label className="auth-label" htmlFor="email">
-                  Email address
-                </label>
-                <input
-                  id="email"
-                  className="auth-input"
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  placeholder="farmer@example.com"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  required
-                />
-                <button
-                  type="submit"
-                  className="btn btn-primary auth-submit"
-                  disabled={sendingMagicLink}
-                >
-                  {sendingMagicLink ? 'Sending...' : 'Send magic link'}
-                </button>
-              </form>
+              <>
+                <div className="auth-mode-switch" role="tablist" aria-label="Sign in method">
+                  <button
+                    type="button"
+                    className={authMode === 'magic-link' ? 'auth-mode-button is-active' : 'auth-mode-button'}
+                    onClick={() => {
+                      setAuthMode('magic-link');
+                      setAuthError(null);
+                      setAuthMessage(null);
+                    }}
+                  >
+                    Magic link
+                  </button>
+                  <button
+                    type="button"
+                    className={authMode === 'password' ? 'auth-mode-button is-active' : 'auth-mode-button'}
+                    onClick={() => {
+                      setAuthMode('password');
+                      setAuthError(null);
+                      setAuthMessage(null);
+                    }}
+                  >
+                    Password
+                  </button>
+                </div>
+
+                {authMode === 'magic-link' ? (
+                  <form className="auth-form" onSubmit={handleMagicLinkSubmit}>
+                    <label className="auth-label" htmlFor="email">
+                      Email address
+                    </label>
+                    <input
+                      id="email"
+                      className="auth-input"
+                      type="email"
+                      name="email"
+                      autoComplete="email"
+                      placeholder="farmer@example.com"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      required
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary auth-submit"
+                      disabled={sendingMagicLink}
+                    >
+                      {sendingMagicLink ? 'Sending...' : 'Send magic link'}
+                    </button>
+                  </form>
+                ) : (
+                  <form className="auth-form" onSubmit={handlePasswordSignIn}>
+                    <label className="auth-label" htmlFor="email-password">
+                      Email address
+                    </label>
+                    <input
+                      id="email-password"
+                      className="auth-input"
+                      type="email"
+                      name="email"
+                      autoComplete="email"
+                      placeholder="farmer@example.com"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      required
+                    />
+                    <label className="auth-label" htmlFor="password">
+                      Password
+                    </label>
+                    <input
+                      id="password"
+                      className="auth-input"
+                      type="password"
+                      name="password"
+                      autoComplete="current-password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      required
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary auth-submit"
+                      disabled={signingInWithPassword}
+                    >
+                      {signingInWithPassword ? 'Signing in...' : 'Sign in with password'}
+                    </button>
+                  </form>
+                )}
+              </>
             )}
 
             {authMessage ? (
@@ -437,6 +573,53 @@ export default function App() {
                 Supabase RLS and a dedicated field map screen for Mapbox
                 integration.
               </p>
+            </div>
+            <div className="account-card">
+              <p className="eyebrow">Account</p>
+              <h2>Set a password once</h2>
+              <p>
+                Use the magic link once, then save a password here for faster
+                sign-in on new devices. This browser session already stays cached.
+              </p>
+              <form className="auth-form" onSubmit={handlePasswordSetup}>
+                <label className="auth-label" htmlFor="new-password">
+                  New password
+                </label>
+                <input
+                  id="new-password"
+                  className="auth-input"
+                  type="password"
+                  name="new-password"
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  minLength={8}
+                />
+                <label className="auth-label" htmlFor="confirm-password">
+                  Confirm password
+                </label>
+                <input
+                  id="confirm-password"
+                  className="auth-input"
+                  type="password"
+                  name="confirm-password"
+                  autoComplete="new-password"
+                  placeholder="Repeat the password"
+                  value={passwordConfirm}
+                  onChange={(event) => setPasswordConfirm(event.target.value)}
+                  required
+                  minLength={8}
+                />
+                <button
+                  type="submit"
+                  className="btn btn-secondary auth-submit"
+                  disabled={savingPassword}
+                >
+                  {savingPassword ? 'Saving...' : 'Save password'}
+                </button>
+              </form>
             </div>
           </section>
 

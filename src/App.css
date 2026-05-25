@@ -301,6 +301,31 @@ p {
   gap: 0.8rem;
 }
 
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.auth-mode-button {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: #ffffff;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.auth-mode-button.is-active {
+  color: #ffffff;
+  background: var(--green);
+  border-color: var(--green);
+}
+
 .auth-label {
   font-size: 0.95rem;
   font-weight: 600;
@@ -360,10 +385,23 @@ p {
 
 .hero-card {
   padding: 1.75rem;
+  display: grid;
+  gap: 1.5rem;
 }
 
 .hero-copy {
   max-width: 42rem;
+}
+
+.account-card {
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-muted);
+}
+
+.account-card p + .auth-form {
+  margin-top: 1rem;
 }
 
 .badge,
