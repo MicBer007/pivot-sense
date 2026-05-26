@@ -5,10 +5,11 @@ import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
-type AppScreen = 'workspace' | 'add-field';
+type AppScreen = 'workspace' | 'add-field' | 'edit-field';
 type AppRoute = {
   tabId: TabId;
   screen: AppScreen;
+  fieldId?: string | null;
 };
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
@@ -118,6 +119,7 @@ const TAB_ROOT_PATHS: Record<TabId, string> = {
   fields: '/fields',
 };
 const ADD_FIELD_PATH = '/fields/add';
+const EDIT_FIELD_PATH_PREFIX = '/fields/';
 
 function readStoredFarmer() {
   if (typeof window === 'undefined') return null;
@@ -161,6 +163,17 @@ function readAppRouteFromLocation(): AppRoute {
   }
 
   const pathname = normalizePathname(window.location.pathname);
+  if (pathname.startsWith(EDIT_FIELD_PATH_PREFIX) && pathname !== ADD_FIELD_PATH) {
+    const fieldId = pathname.slice(EDIT_FIELD_PATH_PREFIX.length);
+    if (fieldId) {
+      return {
+        tabId: 'fields',
+        screen: 'edit-field',
+        fieldId: decodeURIComponent(fieldId),
+      };
+    }
+  }
+
   switch (pathname) {
     case '/':
     case '/fields':
@@ -179,7 +192,15 @@ function readAppRouteFromLocation(): AppRoute {
 }
 
 function buildRoutePath(route: AppRoute) {
-  return route.screen === 'add-field' ? ADD_FIELD_PATH : TAB_ROOT_PATHS[route.tabId];
+  if (route.screen === 'add-field') {
+    return ADD_FIELD_PATH;
+  }
+
+  if (route.screen === 'edit-field' && route.fieldId) {
+    return `${EDIT_FIELD_PATH_PREFIX}${encodeURIComponent(route.fieldId)}`;
+  }
+
+  return TAB_ROOT_PATHS[route.tabId];
 }
 
 function writeAppRoute(route: AppRoute, replace = false) {
@@ -263,6 +284,46 @@ function parseBoundary(value: unknown): PolygonGeometry | null {
   return null;
 }
 
+function parseFieldRecord(record: RpcFieldRow): FieldRecord | null {
+  const boundary = parseBoundary(record.boundary);
+  if (!boundary) return null;
+
+  return {
+    id: record.id,
+    fieldName: record.field_name,
+    boundary,
+    fieldType: parseFieldType(record.field_type),
+    pivotAngleDegrees: parsePivotAngleDegrees(record.pivot_angle_degrees),
+  } satisfies FieldRecord;
+}
+
+async function fetchFieldsForFarmer(currentFarmerId: string) {
+  if (!supabase || !currentFarmerId) {
+    return {
+      data: [] as FieldRecord[],
+      error: null as string | null,
+    };
+  }
+
+  const { data, error } = await supabase.rpc('get_fields_for_farmer', {
+    input_farmer_id: currentFarmerId,
+  });
+
+  if (error) {
+    return {
+      data: [] as FieldRecord[],
+      error: error.message,
+    };
+  }
+
+  return {
+    data: ((data ?? []) as RpcFieldRow[])
+      .map(parseFieldRecord)
+      .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field)),
+    error: null as string | null,
+  };
+}
+
 function parseFieldType(value: unknown): FieldType {
   return value === 'pivot' || value === 'pervits' ? 'pivot' : 'normal';
 }
@@ -284,7 +345,7 @@ function parsePivotAngleDegrees(value: unknown): number | null {
 }
 
 function formatPivotAngleDegrees(angleDegrees: number | null) {
-  return angleDegrees === null ? null : `${normalizeAngleDegrees(angleDegrees)}°`;
+  return angleDegrees === null ? null : `${normalizeAngleDegrees(angleDegrees)} deg`;
 }
 
 function getCircleCoordinate(
@@ -678,24 +739,125 @@ function AccountSwitchIcon() {
   );
 }
 
+function FieldEditorCard({
+  mode,
+  fieldNameDraft,
+  onFieldNameChange,
+  fieldType,
+  pivotAngleDraft,
+  savingField,
+  deletingField,
+  disablePrimaryAction,
+  onPrimaryAction,
+  onCancel,
+  onResetDraft,
+  onDelete,
+}: {
+  mode: 'create' | 'edit';
+  fieldNameDraft: string;
+  onFieldNameChange: (value: string) => void;
+  fieldType: FieldType;
+  pivotAngleDraft: number | null;
+  savingField: boolean;
+  deletingField: boolean;
+  disablePrimaryAction: boolean;
+  onPrimaryAction: () => void;
+  onCancel: () => void;
+  onResetDraft?: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div className="field-creation-card">
+      <div className="field-creation-grid">
+        <label className="auth-label" htmlFor="field-name">
+          Field name
+        </label>
+        <input
+          id="field-name"
+          className="auth-input"
+          type="text"
+          placeholder="North pivot"
+          value={fieldNameDraft}
+          onChange={(event) => onFieldNameChange(event.target.value)}
+        />
+        <div className="field-meta-banner" aria-live="polite">
+          <span className="field-type-pill">{formatFieldType(fieldType)} field</span>
+        </div>
+        {fieldType === 'pivot' ? (
+          <p className="pivot-angle-readout">
+            Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
+          </p>
+        ) : null}
+        <div className="field-action-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onPrimaryAction}
+            disabled={disablePrimaryAction}
+          >
+            {savingField
+              ? mode === 'create'
+                ? 'Saving field...'
+                : 'Saving changes...'
+              : mode === 'create'
+                ? 'Confirm boundary'
+                : 'Save changes'}
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          {mode === 'create' && onResetDraft ? (
+            <button type="button" className="btn btn-secondary" onClick={onResetDraft}>
+              Reset draft
+            </button>
+          ) : null}
+          {mode === 'edit' && onDelete ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-danger"
+              onClick={onDelete}
+              disabled={deletingField}
+            >
+              {deletingField ? 'Deleting field...' : 'Delete field'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FieldMapPanel({
   currentFarmerId,
   mode,
+  editedFieldId,
   onAddField,
-  onCancelAddField,
+  onEditField,
+  onCancelFieldScreen,
   onFieldSaved,
+  onFieldDeleted,
 }: {
   currentFarmerId: string;
-  mode: 'overview' | 'create';
+  mode: 'overview' | 'create' | 'edit';
+  editedFieldId?: string;
   onAddField?: () => void;
-  onCancelAddField?: () => void;
+  onEditField?: (fieldId: string) => void;
+  onCancelFieldScreen?: () => void;
   onFieldSaved?: (fieldName: string) => void;
+  onFieldDeleted?: (fieldName: string) => void;
 }) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const pivotDragActiveRef = useRef(false);
   const pivotPointerIdRef = useRef<number | null>(null);
+  const activePivotCenterRef = useRef<Coordinate | null>(null);
+  const draftPivotHandleRef = useRef<Coordinate | null>(null);
+  const isAddingFieldRef = useRef(false);
+  const isEditingFieldRef = useRef(false);
+  const drawModeRef = useRef<DrawMode>('circle');
+  const circleCenterRef = useRef<Coordinate | null>(null);
+  const circleRadiusLockedRef = useRef(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
   );
@@ -713,20 +875,36 @@ function FieldMapPanel({
   const [circleRadiusMeters, setCircleRadiusMeters] = useState<number | null>(null);
   const [circleRadiusLocked, setCircleRadiusLocked] = useState(false);
   const [savingField, setSavingField] = useState(false);
+  const [deletingField, setDeletingField] = useState(false);
   const isAddingField = mode === 'create';
-  const draftFieldType: FieldType = drawMode === 'circle' ? 'pivot' : 'normal';
+  const isEditingField = mode === 'edit';
+  const selectedField = isEditingField
+    ? fields.find((field) => field.id === editedFieldId) ?? null
+    : null;
+  const selectedCircle =
+    selectedField?.fieldType === 'pivot' ? deriveCircleFromPolygon(selectedField.boundary) : null;
+  const draftFieldType: FieldType = isEditingField
+    ? selectedField?.fieldType ?? 'normal'
+    : drawMode === 'circle'
+      ? 'pivot'
+      : 'normal';
 
   const freePolygon = freePolygonComplete ? buildFreePolygon(freePoints) : null;
   const circlePolygon =
     circleCenter && circleRadiusMeters && circleRadiusMeters > 5
       ? createCirclePolygon(circleCenter, circleRadiusMeters)
       : null;
-  const draftPolygon = drawMode === 'free' ? freePolygon : circlePolygon;
+  const draftPolygon = isEditingField
+    ? selectedField?.boundary ?? null
+    : drawMode === 'free'
+      ? freePolygon
+      : circlePolygon;
   const circlePreviewEdge =
     circleCenter && circleRadiusMeters && circleRadiusMeters > 0 && !circleRadiusLocked
       ? getCircleCoordinate(circleCenter, circleRadiusMeters, 0)
       : null;
-  const savedPivotEntries = fields.flatMap((field) => {
+  const visibleFields = isEditingField ? (selectedField ? [selectedField] : []) : fields;
+  const savedPivotEntries = (isEditingField ? [] : fields).flatMap((field) => {
     if (field.fieldType !== 'pivot' || field.pivotAngleDegrees === null) return [];
 
     const circle = deriveCircleFromPolygon(field.boundary);
@@ -741,12 +919,22 @@ function FieldMapPanel({
       },
     ];
   });
-  const draftPivotEntries =
-    draftFieldType === 'pivot' &&
-    circleCenter &&
-    circleRadiusMeters &&
-    circleRadiusMeters > 5 &&
-    circleRadiusLocked
+  const draftPivotEntries = isEditingField
+    ? selectedField?.fieldType === 'pivot' && selectedCircle
+      ? [
+          {
+            id: selectedField.id,
+            center: selectedCircle.center,
+            radiusMeters: selectedCircle.radiusMeters,
+            pivotAngleDegrees: pivotAngleDraft,
+          },
+        ]
+      : []
+    : draftFieldType === 'pivot' &&
+        circleCenter &&
+        circleRadiusMeters &&
+        circleRadiusMeters > 5 &&
+        circleRadiusLocked
       ? [
           {
             id: 'draft',
@@ -765,6 +953,24 @@ function FieldMapPanel({
         )
       : null;
 
+  useEffect(() => {
+    activePivotCenterRef.current = isEditingField ? selectedCircle?.center ?? null : circleCenter;
+    draftPivotHandleRef.current = draftPivotHandle;
+    isAddingFieldRef.current = isAddingField;
+    isEditingFieldRef.current = isEditingField;
+    drawModeRef.current = drawMode;
+    circleCenterRef.current = circleCenter;
+    circleRadiusLockedRef.current = circleRadiusLocked;
+  }, [
+    isEditingField,
+    selectedCircle,
+    circleCenter,
+    draftPivotHandle,
+    isAddingField,
+    drawMode,
+    circleRadiusLocked,
+  ]);
+
   function resetDraftState(nextMode: DrawMode = drawMode) {
     setDrawMode(nextMode);
     setPivotAngleDraft(0);
@@ -778,47 +984,18 @@ function FieldMapPanel({
   }
 
   async function loadFields() {
-    if (!supabase || !currentFarmerId) {
-      setFields([]);
-      setFieldsLoading(false);
-      return;
-    }
-
     setFieldsLoading(true);
     setFieldError(null);
-
-    const { data, error } = await supabase.rpc('get_fields_for_farmer', {
-      input_farmer_id: currentFarmerId,
-    });
-
-    if (error) {
-      setFieldError(error.message);
-      setFieldsLoading(false);
-      return;
+    const result = await fetchFieldsForFarmer(currentFarmerId);
+    setFields(result.data);
+    if (result.error) {
+      setFieldError(result.error);
     }
-
-    const parsedFields = ((data ?? []) as RpcFieldRow[])
-      .map((record) => {
-        const boundary = parseBoundary(record.boundary);
-        if (!boundary) return null;
-
-        return {
-          id: record.id,
-          fieldName: record.field_name,
-          boundary,
-          fieldType: parseFieldType(record.field_type),
-          pivotAngleDegrees: parsePivotAngleDegrees(record.pivot_angle_degrees),
-        } satisfies FieldRecord;
-      })
-      .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field));
-
-    setFields(parsedFields);
     setFieldsLoading(false);
   }
 
-  function updatePivotAngleFromLngLat(lngLat: mapboxgl.LngLat) {
-    if (!circleCenter) return;
-    setPivotAngleDraft(getPivotAngleDegrees(circleCenter, [lngLat.lng, lngLat.lat]));
+  function updatePivotAngleFromLngLat(center: Coordinate, lngLat: mapboxgl.LngLat) {
+    setPivotAngleDraft(getPivotAngleDegrees(center, [lngLat.lng, lngLat.lat]));
   }
 
   async function handleConfirmBoundary() {
@@ -869,18 +1046,111 @@ function FieldMapPanel({
     onFieldSaved?.(savedFieldName);
   }
 
+  async function handleSaveFieldChanges() {
+    if (!supabase) {
+      setFieldError('Supabase is not configured.');
+      return;
+    }
+
+    if (!currentFarmerId) {
+      setFieldError('Choose a farmer before saving the field.');
+      return;
+    }
+
+    if (!selectedField) {
+      setFieldError('Field not found.');
+      return;
+    }
+
+    if (!fieldNameDraft.trim()) {
+      setFieldError('Add the field name before saving.');
+      return;
+    }
+
+    setSavingField(true);
+    setFieldError(null);
+    setFieldMessage(null);
+
+    const { error } = await supabase.rpc('update_field', {
+      input_farmer_id: currentFarmerId,
+      input_field_id: selectedField.id,
+      input_field_name: fieldNameDraft.trim(),
+      input_pivot_angle_degrees: selectedField.fieldType === 'pivot' ? pivotAngleDraft : null,
+    });
+
+    setSavingField(false);
+
+    if (error) {
+      setFieldError(error.message);
+      return;
+    }
+
+    const savedFieldName = fieldNameDraft.trim();
+    setFieldMessage(`Updated ${savedFieldName}.`);
+    await loadFields();
+    onFieldSaved?.(savedFieldName);
+  }
+
+  async function handleDeleteField() {
+    if (!supabase) {
+      setFieldError('Supabase is not configured.');
+      return;
+    }
+
+    if (!selectedField) {
+      setFieldError('Field not found.');
+      return;
+    }
+
+    if (typeof window !== 'undefined' && !window.confirm(`Delete ${selectedField.fieldName}?`)) {
+      return;
+    }
+
+    setDeletingField(true);
+    setFieldError(null);
+    setFieldMessage(null);
+
+    const { error } = await supabase.rpc('delete_field', {
+      input_farmer_id: currentFarmerId,
+      input_field_id: selectedField.id,
+    });
+
+    setDeletingField(false);
+
+    if (error) {
+      setFieldError(error.message);
+      return;
+    }
+
+    onFieldDeleted?.(selectedField.fieldName);
+  }
+
   useEffect(() => {
     void loadFields();
   }, [currentFarmerId]);
 
   useEffect(() => {
-    setFieldNameDraft('');
-    resetDraftState('circle');
-
     if (mode === 'create') {
+      setFieldNameDraft('');
+      resetDraftState('circle');
       setFieldMessage('Enter a field name, then place the boundary on the map.');
+      return;
     }
-  }, [mode]);
+
+    setFreePoints([]);
+    setFreePolygonComplete(false);
+    setCircleCenter(null);
+    setCircleRadiusMeters(null);
+    setCircleRadiusLocked(false);
+    setFieldMessage(null);
+    setFieldError(null);
+  }, [mode, editedFieldId]);
+
+  useEffect(() => {
+    if (!isEditingField || !selectedField) return;
+    setFieldNameDraft(selectedField.fieldName);
+    setPivotAngleDraft(selectedField.pivotAngleDegrees ?? 0);
+  }, [isEditingField, selectedField]);
 
   useEffect(() => {
     if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
@@ -933,7 +1203,7 @@ function FieldMapPanel({
     const map = mapInstanceRef.current;
     if (!map || status !== 'ready') return;
 
-    ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(fields));
+    ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(visibleFields));
     ensureGeoJsonSource(map, SAVED_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(savedPivotEntries));
     ensureGeoJsonSource(map, DRAFT_BOUNDARY_SOURCE_ID, buildDraftBoundaryGeoJson(draftPolygon));
     ensureGeoJsonSource(
@@ -945,7 +1215,7 @@ function FieldMapPanel({
     ensureMapLayers(map);
   }, [
     status,
-    fields,
+    visibleFields,
     savedPivotEntries,
     draftPolygon,
     drawMode,
@@ -957,9 +1227,9 @@ function FieldMapPanel({
 
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || status !== 'ready' || isAddingField) return;
+    if (!map || status !== 'ready') return;
 
-    if (fields.length === 0) {
+    if (visibleFields.length === 0 && !draftPolygon) {
       map.easeTo({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
@@ -968,8 +1238,9 @@ function FieldMapPanel({
       return;
     }
 
-    const bounds = fields.reduce((currentBounds, field) => {
-      const nextBounds = getPolygonBounds(field.boundary);
+    const polygons = draftPolygon ? [draftPolygon] : visibleFields.map((field) => field.boundary);
+    const bounds = polygons.reduce((currentBounds, polygon) => {
+      const nextBounds = getPolygonBounds(polygon);
       nextBounds.toArray().forEach((point) => currentBounds.extend(point));
       return currentBounds;
     }, new mapboxgl.LngLatBounds());
@@ -981,7 +1252,7 @@ function FieldMapPanel({
         duration: 900,
       });
     }
-  }, [status, fields, isAddingField]);
+  }, [status, visibleFields, draftPolygon]);
 
   useEffect(() => {
     const activeMap = mapInstanceRef.current;
@@ -997,6 +1268,7 @@ function FieldMapPanel({
     }
 
     function updateCursorFromPointerEvent(event: PointerEvent) {
+      const draftPivotHandle = draftPivotHandleRef.current;
       if (!draftPivotHandle) {
         canvas.style.cursor = '';
         return;
@@ -1011,7 +1283,18 @@ function FieldMapPanel({
     }
 
     function handleMapClick(event: mapboxgl.MapMouseEvent) {
-      if (!isAddingField) return;
+      if (!isAddingField) {
+        if (!isEditingField && onEditField) {
+          const features = map.queryRenderedFeatures(event.point, {
+            layers: ['saved-fields-fill', 'saved-fields-line'],
+          });
+          const clickedFieldId = features[0]?.properties?.id;
+          if (typeof clickedFieldId === 'string') {
+            onEditField(clickedFieldId);
+          }
+        }
+        return;
+      }
 
       if (!fieldNameDraft.trim()) {
         setFieldError('Add the field name first, then draw the boundary.');
@@ -1058,29 +1341,37 @@ function FieldMapPanel({
         event.lngLat,
       );
       setCircleRadiusMeters(radius);
-      updatePivotAngleFromLngLat(event.lngLat);
+      updatePivotAngleFromLngLat(circleCenter, event.lngLat);
       setCircleRadiusLocked(true);
       setFieldMessage('Circle ready. Drag the pivot arm around the circle, then confirm the boundary.');
     }
 
     function handleMouseMove(event: mapboxgl.MapMouseEvent) {
-      if (!isAddingField || drawMode !== 'circle' || !circleCenter) {
-        return;
-      }
-
-      if (pivotDragActiveRef.current && circleRadiusLocked) {
+      const activePivotCenter = activePivotCenterRef.current;
+      if (pivotDragActiveRef.current && activePivotCenter) {
         canvas.style.cursor = 'grabbing';
-        updatePivotAngleFromLngLat(event.lngLat);
+        updatePivotAngleFromLngLat(activePivotCenter, event.lngLat);
         return;
       }
 
-      if (!circleRadiusLocked) {
+      const isAddingField = isAddingFieldRef.current;
+      const drawMode = drawModeRef.current;
+      const circleCenter = circleCenterRef.current;
+      const circleRadiusLocked = circleRadiusLockedRef.current;
+      if (isAddingField && drawMode === 'circle' && circleCenter && !circleRadiusLocked) {
         const radius = new mapboxgl.LngLat(circleCenter[0], circleCenter[1]).distanceTo(
           event.lngLat,
         );
         setCircleRadiusMeters(radius);
         canvas.style.cursor = 'crosshair';
         return;
+      }
+
+      if (!isAddingField && !isEditingField) {
+        const features = map.queryRenderedFeatures(event.point, {
+          layers: ['saved-fields-fill', 'saved-fields-line'],
+        });
+        canvas.style.cursor = features.length > 0 ? 'pointer' : '';
       }
     }
 
@@ -1099,11 +1390,25 @@ function FieldMapPanel({
         } catch {}
       }
       canvas.style.cursor = '';
-      setFieldMessage('Pivot position set. Confirm the boundary to save the field.');
+      setFieldMessage(
+        isEditingFieldRef.current
+          ? 'Pivot position set. Save changes when ready.'
+          : 'Pivot position set. Confirm the boundary to save the field.',
+      );
     }
 
     function handlePointerDown(event: PointerEvent) {
-      if (!isAddingField || drawMode !== 'circle' || !circleCenter || !circleRadiusLocked || !draftPivotHandle) {
+      const activePivotCenter = activePivotCenterRef.current;
+      const draftPivotHandle = draftPivotHandleRef.current;
+      if (!activePivotCenter || !draftPivotHandle) {
+        return;
+      }
+
+      const isAddingField = isAddingFieldRef.current;
+      const circleCenter = circleCenterRef.current;
+      const circleRadiusLocked = circleRadiusLockedRef.current;
+      const drawMode = drawModeRef.current;
+      if (isAddingField && (!circleCenter || !circleRadiusLocked || drawMode !== 'circle')) {
         return;
       }
 
@@ -1124,12 +1429,13 @@ function FieldMapPanel({
       map.dragPan.disable();
       canvasElement.setPointerCapture(event.pointerId);
       const lngLat = getLngLatFromPointerEvent(event);
-      updatePivotAngleFromLngLat(lngLat);
+      updatePivotAngleFromLngLat(activePivotCenter, lngLat);
       setFieldMessage('Dragging pivot arm. Release to keep the current position.');
     }
 
     function handlePointerMove(event: PointerEvent) {
-      if (!isAddingField || drawMode !== 'circle' || !circleCenter || !circleRadiusLocked) {
+      const activePivotCenter = activePivotCenterRef.current;
+      if (!activePivotCenter) {
         return;
       }
 
@@ -1137,7 +1443,7 @@ function FieldMapPanel({
         event.preventDefault();
         canvas.style.cursor = 'grabbing';
         const lngLat = getLngLatFromPointerEvent(event);
-        updatePivotAngleFromLngLat(lngLat);
+        updatePivotAngleFromLngLat(activePivotCenter, lngLat);
         return;
       }
 
@@ -1168,19 +1474,19 @@ function FieldMapPanel({
   }, [
     status,
     isAddingField,
+    isEditingField,
     fieldNameDraft,
     drawMode,
     freePoints,
     freePolygonComplete,
     circleCenter,
-    circleRadiusMeters,
     circleRadiusLocked,
-    draftPivotHandle,
+    onEditField,
   ]);
 
   return (
     <section className="map-panel">
-      {!isAddingField ? (
+      {mode === 'overview' ? (
         <div className="field-panel-copy">
           <h2 className="field-panel-title">Field boundaries</h2>
           <button type="button" className="btn btn-primary" onClick={onAddField}>
@@ -1210,20 +1516,37 @@ function FieldMapPanel({
         </div>
       ) : null}
 
-      {!fieldsLoading && fields.length === 0 ? (
+      {!fieldsLoading && isEditingField && !selectedField ? (
         <div className="map-state-card">
-          <h3>No fields yet</h3>
-          <p>This farmer has not created any fields yet. Use the add field button to start.</p>
+          <h3>Field not found</h3>
+          <p>The requested field could not be found for this farmer.</p>
         </div>
       ) : null}
 
       {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
+          <div className="map-status-row">
+            <span className={`status-pill status-${status}`}>
+              {status === 'loading' && 'Loading map'}
+              {status === 'ready' && 'Map ready'}
+              {status === 'error' && 'Map error'}
+            </span>
+            <span className="map-meta" aria-live="polite">
+              {status === 'loading' && 'Connecting to Mapbox...'}
+              {status === 'ready' &&
+                (mode === 'overview'
+                  ? 'Tap a field to edit it.'
+                  : isEditingField
+                    ? 'Adjust the field details and save when ready.'
+                    : 'Draw the field boundary and confirm it.')}
+              {status === 'error' && errorMessage}
+            </span>
+          </div>
           <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
             <div
               id={mapId}
               ref={mapRef}
-              className={isAddingField ? 'map-canvas' : 'map-canvas map-canvas-overview'}
+              className={mode === 'overview' ? 'map-canvas map-canvas-overview' : 'map-canvas'}
               data-testid="mapbox-canvas"
             />
             {isAddingField ? (
@@ -1262,41 +1585,65 @@ function FieldMapPanel({
         </div>
       ) : null}
 
-      {isAddingField ? (
-        <div className="field-creation-card">
-          <div className="field-creation-grid">
-            <label className="auth-label" htmlFor="field-name">
-              Field name
-            </label>
-            <input
-              id="field-name"
-              className="auth-input"
-              type="text"
-              placeholder="North pivot"
-              value={fieldNameDraft}
-              onChange={(event) => setFieldNameDraft(event.target.value)}
-            />
-            <div className="field-meta-banner" aria-live="polite">
-              <span className="field-type-pill">{formatFieldType(draftFieldType)} field</span>
-            </div>
-            <div className="field-action-row">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void handleConfirmBoundary()}
-                disabled={savingField || !draftPolygon || !fieldNameDraft.trim()}
-              >
-                {savingField ? 'Saving field...' : 'Confirm boundary'}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={onCancelAddField}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => resetDraftState(drawMode)}>
-                Reset draft
-              </button>
-            </div>
+      {!fieldsLoading && mode === 'overview' && fields.length === 0 ? (
+        <div className="map-state-card">
+          <h3>No fields yet</h3>
+          <p>This farmer has not created any fields yet. Use the add field button to start.</p>
+        </div>
+      ) : null}
+
+      {!fieldsLoading && mode === 'overview' && fields.length > 0 ? (
+        <div className="map-state-card">
+          <h3>{fields.length === 1 ? '1 field saved' : `${fields.length} fields saved`}</h3>
+          <p>
+            {fields.length === 1
+              ? `Click the map or edit ${fields[0].fieldName} below.`
+              : 'Click any field on the map or use the edit buttons below.'}
+          </p>
+          <div className="field-summary-list">
+            {fields.map((field) => (
+              <article key={field.id} className="field-summary-card">
+                <div className="field-summary-header">
+                  <strong>{field.fieldName}</strong>
+                  <span className="field-type-pill">{formatFieldType(field.fieldType)}</span>
+                </div>
+                <p className="field-summary-meta">
+                  {field.fieldType === 'pivot'
+                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
+                    : 'No pivot position tracked for normal fields.'}
+                </p>
+                <div className="field-summary-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => onEditField?.(field.id)}
+                  >
+                    Edit field
+                  </button>
+                </div>
+              </article>
+            ))}
           </div>
         </div>
+      ) : null}
+
+      {mode !== 'overview' ? (
+        <FieldEditorCard
+          mode={isEditingField ? 'edit' : 'create'}
+          fieldNameDraft={fieldNameDraft}
+          onFieldNameChange={setFieldNameDraft}
+          fieldType={draftFieldType}
+          pivotAngleDraft={draftFieldType === 'pivot' ? pivotAngleDraft : null}
+          savingField={savingField}
+          deletingField={deletingField}
+          disablePrimaryAction={savingField || !fieldNameDraft.trim() || (isAddingField && !draftPolygon)}
+          onPrimaryAction={() =>
+            void (isEditingField ? handleSaveFieldChanges() : handleConfirmBoundary())
+          }
+          onCancel={() => onCancelFieldScreen?.()}
+          onResetDraft={isAddingField ? () => resetDraftState(drawMode) : undefined}
+          onDelete={isEditingField ? () => void handleDeleteField() : undefined}
+        />
       ) : null}
 
       {fieldMessage ? (
@@ -1512,13 +1859,29 @@ export default function App() {
     navigateTo({ tabId: 'fields', screen: 'add-field' });
   }
 
-  function handleCloseAddFieldScreen() {
+  function handleOpenEditFieldScreen(fieldId: string) {
+    setAccountMenuOpen(false);
+    setFieldFlowMessage(null);
+    navigateTo({ tabId: 'fields', screen: 'edit-field', fieldId });
+  }
+
+  function handleCloseFieldScreen() {
     setAccountMenuOpen(false);
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
-  function handleFieldSaved(fieldName: string) {
+  function handleFieldCreated(fieldName: string) {
     setFieldFlowMessage(`Saved ${fieldName}.`);
+    navigateTo({ tabId: 'fields', screen: 'workspace' });
+  }
+
+  function handleFieldUpdated(fieldName: string) {
+    setFieldFlowMessage(`Updated ${fieldName}.`);
+    navigateTo({ tabId: 'fields', screen: 'workspace' });
+  }
+
+  function handleFieldDeleted(fieldName: string) {
+    setFieldFlowMessage(`Deleted ${fieldName}.`);
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
@@ -1624,7 +1987,7 @@ export default function App() {
             </nav>
           ) : (
             <div className="route-crumb">
-              <button type="button" className="btn btn-secondary" onClick={handleCloseAddFieldScreen}>
+              <button type="button" className="btn btn-secondary" onClick={handleCloseFieldScreen}>
                 Back to fields
               </button>
             </div>
@@ -1689,7 +2052,7 @@ export default function App() {
                 type="button"
                 className="mobile-tab"
                 onClick={() => {
-                  handleCloseAddFieldScreen();
+                  handleCloseFieldScreen();
                   setMenuOpen(false);
                 }}
               >
@@ -1721,6 +2084,7 @@ export default function App() {
                     currentFarmerId={currentFarmerId}
                     mode="overview"
                     onAddField={handleOpenAddFieldScreen}
+                    onEditField={handleOpenEditFieldScreen}
                   />
                   {fieldFlowMessage ? (
                     <p className="auth-feedback auth-feedback-success" aria-live="polite">
@@ -1735,18 +2099,30 @@ export default function App() {
           ) : (
             <section className="content-card route-card" aria-labelledby="field-route-title">
               <header className="content-header route-header">
-                <h2 id="field-route-title">Add field</h2>
-                <button type="button" className="btn btn-secondary" onClick={handleCloseAddFieldScreen}>
+                <div>
+                  <p className="eyebrow">Field setup</p>
+                  <h2 id="field-route-title">
+                    {activeScreen === 'edit-field' ? 'Edit field' : 'Add field'}
+                  </h2>
+                  <p className="route-copy">
+                    {activeScreen === 'edit-field'
+                      ? `Update the saved field for ${currentFarmerName || 'this farmer'}.`
+                      : `Draw and save a field for ${currentFarmerName || 'this farmer'} on a separate screen.`}
+                  </p>
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={handleCloseFieldScreen}>
                   Back to fields
                 </button>
               </header>
 
               <FieldMapPanel
-                key="field-create"
+                key={activeScreen === 'edit-field' ? `field-edit-${route.fieldId}` : 'field-create'}
                 currentFarmerId={currentFarmerId}
-                mode="create"
-                onCancelAddField={handleCloseAddFieldScreen}
-                onFieldSaved={handleFieldSaved}
+                mode={activeScreen === 'edit-field' ? 'edit' : 'create'}
+                editedFieldId={route.fieldId ?? undefined}
+                onCancelFieldScreen={handleCloseFieldScreen}
+                onFieldSaved={activeScreen === 'edit-field' ? handleFieldUpdated : handleFieldCreated}
+                onFieldDeleted={handleFieldDeleted}
               />
             </section>
           )}
