@@ -472,6 +472,16 @@ function getPolygonBounds(polygon: PolygonGeometry) {
   return bounds;
 }
 
+function getPolygonsBounds(polygons: PolygonGeometry[]) {
+  const bounds = polygons.reduce((currentBounds, polygon) => {
+    const nextBounds = getPolygonBounds(polygon);
+    nextBounds.toArray().forEach((point) => currentBounds.extend(point));
+    return currentBounds;
+  }, new mapboxgl.LngLatBounds());
+
+  return bounds.isEmpty() ? null : bounds;
+}
+
 function createCirclePolygon(center: Coordinate, radiusMeters: number, steps = 48): PolygonGeometry {
   const latRadians = (center[1] * Math.PI) / 180;
   const latDegreesPerMeter = 1 / 111320;
@@ -1079,6 +1089,7 @@ function FieldMapPanel({
   const pivotPointerIdRef = useRef<number | null>(null);
   const activePivotCenterRef = useRef<Coordinate | null>(null);
   const draftPivotHandleRef = useRef<Coordinate | null>(null);
+  const firstCameraSyncRef = useRef(true);
   const isAddingFieldRef = useRef(false);
   const isEditingFieldRef = useRef(false);
   const drawModeRef = useRef<DrawMode>('circle');
@@ -1386,21 +1397,34 @@ function FieldMapPanel({
   }, [isEditingField, selectedField]);
 
   useEffect(() => {
-    if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
+    if (!MAPBOX_ACCESS_TOKEN || !mapRef.current || fieldsLoading || mapInstanceRef.current) {
       return;
     }
 
     mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 
     let cancelled = false;
+    firstCameraSyncRef.current = true;
     setStatus('loading');
+    const initialBounds = getPolygonsBounds(visibleFields.map((field) => field.boundary));
 
     try {
       const map = new mapboxgl.Map({
         container: mapRef.current,
         style: MAPBOX_STYLE_URL,
-        center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        ...(initialBounds
+          ? {
+              bounds: initialBounds,
+              fitBoundsOptions: {
+                padding: 72,
+                maxZoom: 15,
+                duration: 0,
+              },
+            }
+          : {
+              center: DEFAULT_CENTER,
+              zoom: DEFAULT_ZOOM,
+            }),
         attributionControl: true,
         clickTolerance: 10,
       });
@@ -1433,7 +1457,7 @@ function FieldMapPanel({
       mapInstanceRef.current?.remove();
       mapInstanceRef.current = null;
     };
-  }, []);
+  }, [fieldsLoading]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1468,24 +1492,23 @@ function FieldMapPanel({
       map.easeTo({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
       return;
     }
 
-    const polygons = draftPolygon ? [draftPolygon] : visibleFields.map((field) => field.boundary);
-    const bounds = polygons.reduce((currentBounds, polygon) => {
-      const nextBounds = getPolygonBounds(polygon);
-      nextBounds.toArray().forEach((point) => currentBounds.extend(point));
-      return currentBounds;
-    }, new mapboxgl.LngLatBounds());
+    const bounds = getPolygonsBounds(
+      draftPolygon ? [draftPolygon] : visibleFields.map((field) => field.boundary),
+    );
 
-    if (!bounds.isEmpty()) {
+    if (bounds) {
       map.fitBounds(bounds, {
         padding: 72,
         maxZoom: 15,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
     }
   }, [status, visibleFields, draftPolygon]);
 
@@ -1896,6 +1919,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const firstCameraSyncRef = useRef(true);
   const pivotDragActiveRef = useRef(false);
   const pivotPointerIdRef = useRef<number | null>(null);
   const selectedCircleRef = useRef<{ center: Coordinate; radiusMeters: number } | null>(null);
@@ -1986,6 +2010,14 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
 
   useEffect(() => {
+    if (selectedFieldId && pivotFields.some((field) => field.id === selectedFieldId)) {
+      return;
+    }
+
+    setSelectedFieldId(pivotFields[0]?.id ?? '');
+  }, [pivotFields, selectedFieldId]);
+
+  useEffect(() => {
     if (loadingFields || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
       return;
     }
@@ -1993,14 +2025,29 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 
     let cancelled = false;
+    firstCameraSyncRef.current = true;
     setMapStatus('loading');
+    const initialBounds = getPolygonsBounds(
+      (selectedField ? [selectedField] : pivotFields).map((field) => field.boundary),
+    );
 
     try {
       const map = new mapboxgl.Map({
         container: mapRef.current,
         style: MAPBOX_STYLE_URL,
-        center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        ...(initialBounds
+          ? {
+              bounds: initialBounds,
+              fitBoundsOptions: {
+                padding: 72,
+                maxZoom: 15,
+                duration: 0,
+              },
+            }
+          : {
+              center: DEFAULT_CENTER,
+              zoom: DEFAULT_ZOOM,
+            }),
         attributionControl: true,
         clickTolerance: 10,
       });
@@ -2080,23 +2127,21 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       map.easeTo({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
       return;
     }
 
-    const bounds = polygons.reduce((currentBounds, polygon) => {
-      const nextBounds = getPolygonBounds(polygon);
-      nextBounds.toArray().forEach((point) => currentBounds.extend(point));
-      return currentBounds;
-    }, new mapboxgl.LngLatBounds());
+    const bounds = getPolygonsBounds(polygons);
 
-    if (!bounds.isEmpty()) {
+    if (bounds) {
       map.fitBounds(bounds, {
         padding: 72,
         maxZoom: 15,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
     }
   }, [mapStatus, pivotFields, selectedField]);
 
