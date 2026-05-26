@@ -1116,6 +1116,7 @@ function FieldMapPanel({
   const pivotPointerIdRef = useRef<number | null>(null);
   const activePivotCenterRef = useRef<Coordinate | null>(null);
   const draftPivotHandleRef = useRef<Coordinate | null>(null);
+  const selectedFieldRef = useRef<FieldRecord | null>(null);
   const firstCameraSyncRef = useRef(true);
   const isAddingFieldRef = useRef(false);
   const isEditingFieldRef = useRef(false);
@@ -1313,11 +1314,18 @@ function FieldMapPanel({
     setFieldMessage(`Saved ${savedFieldName}.`);
     setFieldNameDraft('');
     resetDraftState('circle');
+    if (onFieldSaved) {
+      onFieldSaved(savedFieldName);
+      return;
+    }
     await loadFields();
-    onFieldSaved?.(savedFieldName);
   }
 
   async function handleSaveFieldChanges() {
+    const fieldToSave =
+      selectedField ??
+      (selectedFieldRef.current?.id === editedFieldId ? selectedFieldRef.current : null);
+
     if (!supabase) {
       setFieldError('Supabase is not configured.');
       return;
@@ -1328,7 +1336,7 @@ function FieldMapPanel({
       return;
     }
 
-    if (!selectedField) {
+    if (!fieldToSave) {
       setFieldError('Field not found.');
       return;
     }
@@ -1344,9 +1352,9 @@ function FieldMapPanel({
 
     const { error } = await supabase.rpc('update_field', {
       input_farmer_id: currentFarmerId,
-      input_field_id: selectedField.id,
+      input_field_id: fieldToSave.id,
       input_field_name: fieldNameDraft.trim(),
-      input_pivot_angle_degrees: selectedField.fieldType === 'pivot' ? pivotAngleDraft : null,
+      input_pivot_angle_degrees: fieldToSave.fieldType === 'pivot' ? pivotAngleDraft : null,
     });
 
     setSavingField(false);
@@ -1358,22 +1366,29 @@ function FieldMapPanel({
 
     const savedFieldName = fieldNameDraft.trim();
     setFieldMessage(`Updated ${savedFieldName}.`);
+    if (onFieldSaved) {
+      onFieldSaved(savedFieldName);
+      return;
+    }
     await loadFields();
-    onFieldSaved?.(savedFieldName);
   }
 
   async function handleDeleteField() {
+    const fieldToDelete =
+      selectedField ??
+      (selectedFieldRef.current?.id === editedFieldId ? selectedFieldRef.current : null);
+
     if (!supabase) {
       setFieldError('Supabase is not configured.');
       return;
     }
 
-    if (!selectedField) {
+    if (!fieldToDelete) {
       setFieldError('Field not found.');
       return;
     }
 
-    if (typeof window !== 'undefined' && !window.confirm(`Delete ${selectedField.fieldName}?`)) {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete ${fieldToDelete.fieldName}?`)) {
       return;
     }
 
@@ -1383,7 +1398,7 @@ function FieldMapPanel({
 
     const { error } = await supabase.rpc('delete_field', {
       input_farmer_id: currentFarmerId,
-      input_field_id: selectedField.id,
+      input_field_id: fieldToDelete.id,
     });
 
     setDeletingField(false);
@@ -1393,7 +1408,7 @@ function FieldMapPanel({
       return;
     }
 
-    onFieldDeleted?.(selectedField.fieldName);
+    onFieldDeleted?.(fieldToDelete.fieldName);
   }
 
   useEffect(() => {
@@ -1419,6 +1434,7 @@ function FieldMapPanel({
 
   useEffect(() => {
     if (!isEditingField || !selectedField) return;
+    selectedFieldRef.current = selectedField;
     setFieldNameDraft(selectedField.fieldName);
     setPivotAngleDraft(selectedField.pivotAngleDegrees ?? 0);
   }, [isEditingField, selectedField]);

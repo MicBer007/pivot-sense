@@ -779,6 +779,10 @@ p {
   border: 1px solid var(--ink-line);
 }
 
+.route-card .map-canvas {
+  min-height: min(26rem, 42vh);
+}
+
 .map-canvas-overview {
   min-height: 30rem;
 }
