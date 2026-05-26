@@ -829,3 +829,87 @@ code {
     bottom: 0.75rem;
   }
 }
+
+.actions-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.actions-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.actions-form {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, #fbfdfb 0%, #f4f8f4 100%);
+}
+
+.pivot-dial-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--border);
+}
+
+.pivot-dial {
+  touch-action: none;
+  cursor: grab;
+}
+
+.pivot-dial:active {
+  cursor: grabbing;
+}
+
+.pivot-dial-readout {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  min-width: 160px;
+}
+
+.pivot-dial-readout div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pivot-dial-readout dt {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.pivot-dial-readout dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.actions-quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.actions-effective-readout {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius);
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.actions-effective-readout strong {
+  font-size: 1.15rem;
+}
+

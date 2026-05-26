@@ -3,7 +3,7 @@ import mapboxgl from 'mapbox-gl';
 import './App.css';
 import { supabase, supabaseConfigured } from './supabase';
 
-type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
+type TabId = 'overview' | 'insights' | 'alerts' | 'fields' | 'actions';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
 type AppScreen = 'workspace' | 'add-field' | 'edit-field';
 type AppRoute = {
@@ -95,6 +95,13 @@ const tabs: TabConfig[] = [
     description:
       'Add fields, draw boundaries, and keep each farmer focused on their own map.',
   },
+  {
+    id: 'actions',
+    label: 'Actions',
+    title: 'Log a pivot action',
+    description:
+      'Record how far the pivot moved and how many millimetres of water it applied.',
+  },
 ];
 
 const MAPBOX_ACCESS_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN?.trim();
@@ -118,6 +125,7 @@ const TAB_ROOT_PATHS: Record<TabId, string> = {
   insights: '/insights',
   alerts: '/alerts',
   fields: '/fields',
+  actions: '/actions',
 };
 const ADD_FIELD_PATH = '/fields/add';
 const EDIT_FIELD_PATH_PREFIX = '/fields/';
@@ -187,6 +195,8 @@ function readAppRouteFromLocation(): AppRoute {
       return { tabId: 'insights', screen: 'workspace' };
     case '/alerts':
       return { tabId: 'alerts', screen: 'workspace' };
+    case '/actions':
+      return { tabId: 'actions', screen: 'workspace' };
     default:
       return { tabId: 'fields', screen: 'workspace' };
   }
@@ -1655,6 +1665,412 @@ function FieldMapPanel({
   );
 }
 
+function todayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function computeClockwiseMovement(startAngle: number, endAngle: number) {
+  const start = normalizeAngleDegrees(startAngle);
+  const end = normalizeAngleDegrees(endAngle);
+  return (end - start + 360) % 360;
+}
+
+const PIVOT_DIAL_SIZE = 220;
+const PIVOT_DIAL_RADIUS = 92;
+
+function PivotDial({
+  startAngle,
+  endAngle,
+  onChange,
+}: {
+  startAngle: number;
+  endAngle: number;
+  onChange: (nextAngle: number) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const draggingRef = useRef(false);
+
+  const center = PIVOT_DIAL_SIZE / 2;
+  const start = normalizeAngleDegrees(startAngle);
+  const end = normalizeAngleDegrees(endAngle);
+
+  function angleToPoint(angle: number) {
+    const radians = (normalizeAngleDegrees(angle) * Math.PI) / 180;
+    return {
+      x: center + Math.sin(radians) * PIVOT_DIAL_RADIUS,
+      y: center - Math.cos(radians) * PIVOT_DIAL_RADIUS,
+    };
+  }
+
+  function pointerToAngle(event: PointerEvent | React.PointerEvent) {
+    const svg = svgRef.current;
+    if (!svg) return end;
+    const rect = svg.getBoundingClientRect();
+    const x = event.clientX - rect.left - center;
+    const y = event.clientY - rect.top - center;
+    const radians = Math.atan2(x, -y);
+    return normalizeAngleDegrees((radians * 180) / Math.PI);
+  }
+
+  function handlePointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    event.preventDefault();
+    draggingRef.current = true;
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    onChange(pointerToAngle(event));
+  }
+
+  function handlePointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (!draggingRef.current) return;
+    event.preventDefault();
+    onChange(pointerToAngle(event));
+  }
+
+  function handlePointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    try {
+      (event.target as Element).releasePointerCapture?.(event.pointerId);
+    } catch {}
+  }
+
+  const startPoint = angleToPoint(start);
+  const endPoint = angleToPoint(end);
+
+  return (
+    <svg
+      ref={svgRef}
+      className="pivot-dial"
+      width={PIVOT_DIAL_SIZE}
+      height={PIVOT_DIAL_SIZE}
+      viewBox={`0 0 ${PIVOT_DIAL_SIZE} ${PIVOT_DIAL_SIZE}`}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      role="slider"
+      aria-label="New pivot angle"
+      aria-valuemin={0}
+      aria-valuemax={359}
+      aria-valuenow={end}
+    >
+      <circle
+        cx={center}
+        cy={center}
+        r={PIVOT_DIAL_RADIUS}
+        fill="rgba(47, 125, 59, 0.08)"
+        stroke="#cfd9d2"
+        strokeWidth={1.5}
+      />
+      <line
+        x1={center}
+        y1={center}
+        x2={startPoint.x}
+        y2={startPoint.y}
+        stroke="#8aa394"
+        strokeWidth={2}
+        strokeDasharray="4 4"
+      />
+      <circle cx={startPoint.x} cy={startPoint.y} r={5} fill="#8aa394" />
+      <line
+        x1={center}
+        y1={center}
+        x2={endPoint.x}
+        y2={endPoint.y}
+        stroke="#14532d"
+        strokeWidth={3}
+      />
+      <circle
+        cx={endPoint.x}
+        cy={endPoint.y}
+        r={10}
+        fill="#f59e0b"
+        stroke="#ffffff"
+        strokeWidth={2}
+      />
+      <circle cx={center} cy={center} r={4} fill="#14532d" />
+    </svg>
+  );
+}
+
+function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
+  const [fields, setFields] = useState<FieldRecord[]>([]);
+  const [loadingFields, setLoadingFields] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedFieldId, setSelectedFieldId] = useState('');
+  const [endDate, setEndDate] = useState<string>(() => todayDateString());
+  const [newAngle, setNewAngle] = useState<number>(0);
+  const [movementOverride, setMovementOverride] = useState<string>('');
+  const [mmAppliedRaw, setMmAppliedRaw] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
+  const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
+  const startAngle = selectedField?.pivotAngleDegrees ?? 0;
+  const draggedMovement = computeClockwiseMovement(startAngle, newAngle);
+  const movementDegrees = movementOverride.trim() === ''
+    ? draggedMovement
+    : Math.max(0, Math.min(360, Math.round(Number(movementOverride) || 0)));
+  const movementPct = movementDegrees / 360;
+  const mmAppliedNumber = Number(mmAppliedRaw);
+  const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
+  const effectiveMm = mmAppliedValid ? mmAppliedNumber * movementPct : 0;
+
+  async function loadPivotFields() {
+    if (!currentFarmerId) return;
+    setLoadingFields(true);
+    setLoadError(null);
+    const result = await fetchFieldsForFarmer(currentFarmerId);
+    setFields(result.data);
+    if (result.error) {
+      setLoadError(result.error);
+    }
+    setLoadingFields(false);
+  }
+
+  useEffect(() => {
+    void loadPivotFields();
+  }, [currentFarmerId]);
+
+  useEffect(() => {
+    if (selectedField) {
+      setNewAngle(selectedField.pivotAngleDegrees ?? 0);
+      setMovementOverride('');
+    }
+  }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
+
+  async function handleSave() {
+    if (!supabase) {
+      setSaveError('Supabase is not configured.');
+      return;
+    }
+    if (!currentFarmerId) {
+      setSaveError('Choose a farmer first.');
+      return;
+    }
+    if (!selectedField) {
+      setSaveError('Pick a pivot field.');
+      return;
+    }
+    if (!endDate) {
+      setSaveError('Set the end date.');
+      return;
+    }
+    if (!mmAppliedValid) {
+      setSaveError('Enter the millimetres applied at the pivot.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+
+    const { error } = await supabase.rpc('log_action', {
+      input_farmer_id: currentFarmerId,
+      input_field_id: selectedField.id,
+      input_end_date: endDate,
+      input_movement_degrees: movementDegrees,
+      input_mm_applied_at_pivot: mmAppliedNumber,
+      input_new_pivot_angle_degrees: normalizeAngleDegrees(newAngle),
+    });
+
+    setSaving(false);
+
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+
+    setSaveMessage(
+      `Logged ${effectiveMm.toFixed(2)} mm across ${selectedField.fieldName}.`,
+    );
+    setMmAppliedRaw('');
+    setMovementOverride('');
+    await loadPivotFields();
+  }
+
+  if (!loadingFields && pivotFields.length === 0) {
+    return (
+      <section className="actions-panel" aria-labelledby="actions-title">
+        <h2 id="actions-title">Log a pivot action</h2>
+        <div className="map-state-card">
+          <h3>No pivot fields</h3>
+          <p>
+            Add a pivot field on the Fields tab first, then come back to log an
+            irrigation action against it.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="actions-panel" aria-labelledby="actions-title">
+      <header className="actions-header">
+        <h2 id="actions-title">Log a pivot action</h2>
+        <p>
+          Pick a pivot, drag it to where it stopped, and enter the millimetres
+          the pivot put down at full output.
+        </p>
+      </header>
+
+      {loadingFields ? (
+        <div className="map-state-card">
+          <h3>Loading fields</h3>
+          <p>Fetching pivot fields for this farmer.</p>
+        </div>
+      ) : null}
+
+      {loadError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {loadError}
+        </p>
+      ) : null}
+
+      {!loadingFields ? (
+        <div className="actions-form">
+          <label className="auth-label" htmlFor="actions-field">
+            Pivot field
+          </label>
+          <select
+            id="actions-field"
+            className="auth-input"
+            value={selectedFieldId}
+            onChange={(event) => setSelectedFieldId(event.target.value)}
+          >
+            <option value="">Select a pivot...</option>
+            {pivotFields.map((field) => (
+              <option key={field.id} value={field.id}>
+                {field.fieldName} ({formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'no angle'})
+              </option>
+            ))}
+          </select>
+
+          <label className="auth-label" htmlFor="actions-end-date">
+            End date
+          </label>
+          <input
+            id="actions-end-date"
+            className="auth-input"
+            type="date"
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
+
+          {selectedField ? (
+            <>
+              <div className="pivot-dial-wrap">
+                <PivotDial
+                  startAngle={startAngle}
+                  endAngle={newAngle}
+                  onChange={setNewAngle}
+                />
+                <dl className="pivot-dial-readout">
+                  <div>
+                    <dt>Start</dt>
+                    <dd>{normalizeAngleDegrees(startAngle)}°</dd>
+                  </div>
+                  <div>
+                    <dt>End</dt>
+                    <dd>{normalizeAngleDegrees(newAngle)}°</dd>
+                  </div>
+                  <div>
+                    <dt>Movement</dt>
+                    <dd>{movementDegrees}° ({(movementPct * 100).toFixed(1)}%)</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="actions-quick-row">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setMovementOverride('360');
+                    setNewAngle(normalizeAngleDegrees(startAngle));
+                  }}
+                >
+                  Full sweep (360°)
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setMovementOverride('');
+                    setNewAngle(normalizeAngleDegrees(startAngle));
+                  }}
+                >
+                  Reset to start
+                </button>
+              </div>
+
+              <label className="auth-label" htmlFor="actions-movement-override">
+                Movement (degrees) — override
+              </label>
+              <input
+                id="actions-movement-override"
+                className="auth-input"
+                type="number"
+                min={0}
+                max={360}
+                step={1}
+                placeholder={`${draggedMovement}`}
+                value={movementOverride}
+                onChange={(event) => setMovementOverride(event.target.value)}
+              />
+
+              <label className="auth-label" htmlFor="actions-mm">
+                Millimetres at pivot
+              </label>
+              <input
+                id="actions-mm"
+                className="auth-input"
+                type="number"
+                min={0}
+                step="0.1"
+                placeholder="e.g. 20"
+                value={mmAppliedRaw}
+                onChange={(event) => setMmAppliedRaw(event.target.value)}
+              />
+
+              <div className="actions-effective-readout">
+                <span>Spread across field:</span>
+                <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void handleSave()}
+                disabled={saving || !mmAppliedValid}
+              >
+                {saving ? 'Saving action...' : 'Log action'}
+              </button>
+            </>
+          ) : null}
+
+          {saveMessage ? (
+            <p className="auth-feedback auth-feedback-success" aria-live="polite">
+              {saveMessage}
+            </p>
+          ) : null}
+
+          {saveError ? (
+            <p className="auth-feedback auth-feedback-error" aria-live="polite">
+              {saveError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function PlaceholderPanel({ tab }: { tab: TabConfig }) {
   return (
     <section className="placeholder-panel" aria-labelledby={`${tab.id}-placeholder-title`}>
@@ -2086,6 +2502,8 @@ export default function App() {
                     </p>
                   ) : null}
                 </>
+              ) : activeTab === 'actions' ? (
+                <ActionsPanel currentFarmerId={currentFarmerId} />
               ) : (
                 <PlaceholderPanel tab={tabs.find(({ id }) => id === activeTab) ?? tabs[0]} />
               )}
