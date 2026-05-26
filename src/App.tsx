@@ -3,7 +3,7 @@ import mapboxgl from 'mapbox-gl';
 import './App.css';
 import { supabase, supabaseConfigured } from './supabase';
 
-type TabId = 'overview' | 'insights' | 'alerts' | 'fields' | 'actions';
+type TabId = 'insights' | 'fields' | 'actions';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
 type AppScreen = 'workspace' | 'add-field' | 'edit-field';
 type AppRoute = {
@@ -68,29 +68,8 @@ type TabConfig = {
 
 const tabs: TabConfig[] = [
   {
-    id: 'overview',
-    label: 'Overview',
-    title: 'PivotSense overview',
-    description:
-      'High-level farm health, yield trends, and current season status can live here.',
-  },
-  {
-    id: 'insights',
-    label: 'Insights',
-    title: 'Agronomy insights',
-    description:
-      'This tab is ready for recommendations, anomaly summaries, and sensor-driven guidance.',
-  },
-  {
-    id: 'alerts',
-    label: 'Alerts',
-    title: 'Priority alerts',
-    description:
-      'Use this area for irrigation issues, disease warnings, and urgent operational prompts.',
-  },
-  {
     id: 'fields',
-    label: 'Fields',
+    label: 'Overview',
     title: 'Field boundaries',
     description:
       'Add fields, draw boundaries, and keep each farmer focused on their own map.',
@@ -101,6 +80,13 @@ const tabs: TabConfig[] = [
     title: 'Log a pivot action',
     description:
       'Record how far the pivot moved and how many millimetres of water it applied.',
+  },
+  {
+    id: 'insights',
+    label: 'Insights',
+    title: 'Agronomy insights',
+    description:
+      'This tab is ready for recommendations, anomaly summaries, and sensor-driven guidance.',
   },
 ];
 
@@ -121,9 +107,7 @@ const DRAFT_PIVOT_SOURCE_ID = 'draft-pivot';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
 const TOUCH_HIT_RADIUS_PX = 28;
 const TAB_ROOT_PATHS: Record<TabId, string> = {
-  overview: '/overview',
   insights: '/insights',
-  alerts: '/alerts',
   fields: '/fields',
   actions: '/actions',
 };
@@ -189,12 +173,8 @@ function readAppRouteFromLocation(): AppRoute {
       return { tabId: 'fields', screen: 'workspace' };
     case '/fields/add':
       return { tabId: 'fields', screen: 'add-field' };
-    case '/overview':
-      return { tabId: 'overview', screen: 'workspace' };
     case '/insights':
       return { tabId: 'insights', screen: 'workspace' };
-    case '/alerts':
-      return { tabId: 'alerts', screen: 'workspace' };
     case '/actions':
       return { tabId: 'actions', screen: 'workspace' };
     default:
@@ -741,6 +721,42 @@ function Logo() {
   );
 }
 
+function TabIcon({ tabId }: { tabId: TabId }) {
+  const common = {
+    viewBox: '0 0 24 24',
+    'aria-hidden': true as const,
+    focusable: false as const,
+    className: 'bottom-tab-icon',
+  };
+
+  if (tabId === 'fields') {
+    return (
+      <svg {...common}>
+        <path d="M3 6 L9 4 L15 6 L21 4 L21 18 L15 20 L9 18 L3 20 Z" />
+        <path d="M9 4 V18" />
+        <path d="M15 6 V20" />
+      </svg>
+    );
+  }
+
+  if (tabId === 'actions') {
+    return (
+      <svg {...common}>
+        <path d="M12 4c-3 4-5 6.5-5 9.2A5 5 0 0 0 17 13.2C17 10.5 15 8 12 4Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...common}>
+      <path d="M4 18h16" />
+      <path d="M7 18V11" />
+      <path d="M12 18V7" />
+      <path d="M17 18v-5" />
+    </svg>
+  );
+}
+
 function AccountSwitchIcon() {
   return (
     <svg
@@ -756,10 +772,32 @@ function AccountSwitchIcon() {
   );
 }
 
-function FieldEditorCard({
-  mode,
+function FieldNameInput({
   fieldNameDraft,
   onFieldNameChange,
+}: {
+  fieldNameDraft: string;
+  onFieldNameChange: (value: string) => void;
+}) {
+  return (
+    <div className="field-name-card">
+      <label className="auth-label" htmlFor="field-name">
+        Field name
+      </label>
+      <input
+        id="field-name"
+        className="auth-input"
+        type="text"
+        placeholder="North pivot"
+        value={fieldNameDraft}
+        onChange={(event) => onFieldNameChange(event.target.value)}
+      />
+    </div>
+  );
+}
+
+function FieldEditorCard({
+  mode,
   fieldType,
   pivotAngleDraft,
   savingField,
@@ -771,8 +809,6 @@ function FieldEditorCard({
   onDelete,
 }: {
   mode: 'create' | 'edit';
-  fieldNameDraft: string;
-  onFieldNameChange: (value: string) => void;
   fieldType: FieldType;
   pivotAngleDraft: number | null;
   savingField: boolean;
@@ -786,17 +822,6 @@ function FieldEditorCard({
   return (
     <div className="field-creation-card">
       <div className="field-creation-grid">
-        <label className="auth-label" htmlFor="field-name">
-          Field name
-        </label>
-        <input
-          id="field-name"
-          className="auth-input"
-          type="text"
-          placeholder="North pivot"
-          value={fieldNameDraft}
-          onChange={(event) => onFieldNameChange(event.target.value)}
-        />
         <div className="field-meta-banner" aria-live="polite">
           <span className="field-type-pill">{formatFieldType(fieldType)} field</span>
         </div>
@@ -1491,12 +1516,16 @@ function FieldMapPanel({
   return (
     <section className="map-panel">
       {mode === 'overview' ? (
-        <div className="field-panel-copy">
+        <header className="field-panel-header">
           <h2 className="field-panel-title">Field boundaries</h2>
-          <button type="button" className="btn btn-primary" onClick={onAddField}>
-            Add field
-          </button>
-        </div>
+        </header>
+      ) : null}
+
+      {mode !== 'overview' ? (
+        <FieldNameInput
+          fieldNameDraft={fieldNameDraft}
+          onFieldNameChange={setFieldNameDraft}
+        />
       ) : null}
 
       {!MAPBOX_ACCESS_TOKEN ? (
@@ -1589,6 +1618,15 @@ function FieldMapPanel({
         </div>
       ) : null}
 
+      {mode === 'overview' ? (
+        <div className="field-action-bar">
+          <button type="button" className="btn btn-primary field-add-btn" onClick={onAddField}>
+            <span className="field-add-btn-glyph" aria-hidden="true">+</span>
+            Add a field
+          </button>
+        </div>
+      ) : null}
+
       {!fieldsLoading && mode === 'overview' && fields.length === 0 ? (
         <div className="map-state-card">
           <h3>No fields yet</h3>
@@ -1609,14 +1647,6 @@ function FieldMapPanel({
               <article key={field.id} className="field-summary-card">
                 <div className="field-summary-header">
                   <strong>{field.fieldName}</strong>
-                  <span className="field-type-pill">{formatFieldType(field.fieldType)}</span>
-                </div>
-                <p className="field-summary-meta">
-                  {field.fieldType === 'pivot'
-                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
-                    : 'No pivot position tracked for normal fields.'}
-                </p>
-                <div className="field-summary-actions">
                   <button
                     type="button"
                     className="btn btn-secondary"
@@ -1625,6 +1655,11 @@ function FieldMapPanel({
                     Edit field
                   </button>
                 </div>
+                <p className="field-summary-meta">
+                  {field.fieldType === 'pivot'
+                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
+                    : 'No pivot position tracked for normal fields.'}
+                </p>
               </article>
             ))}
           </div>
@@ -1634,8 +1669,6 @@ function FieldMapPanel({
       {mode !== 'overview' ? (
         <FieldEditorCard
           mode={isEditingField ? 'edit' : 'create'}
-          fieldNameDraft={fieldNameDraft}
-          onFieldNameChange={setFieldNameDraft}
           fieldType={draftFieldType}
           pivotAngleDraft={draftFieldType === 'pivot' ? pivotAngleDraft : null}
           savingField={savingField}
@@ -1952,7 +1985,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
           </select>
 
           <label className="auth-label" htmlFor="actions-end-date">
-            End date
+            Action date
           </label>
           <input
             id="actions-end-date"
@@ -2082,7 +2115,6 @@ function PlaceholderPanel({ tab }: { tab: TabConfig }) {
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => readAppRouteFromLocation());
-  const [menuOpen, setMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [appState, setAppState] = useState<AppState>('loading');
   const [farmerNameInput, setFarmerNameInput] = useState('');
@@ -2108,7 +2140,6 @@ export default function App() {
   function navigateTo(nextRoute: AppRoute, replace = false) {
     writeAppRoute(nextRoute, replace);
     setRoute(nextRoute);
-    setMenuOpen(false);
   }
 
   useEffect(() => {
@@ -2381,27 +2412,6 @@ export default function App() {
         <div className="navbar-inner">
           <Logo />
 
-          {activeScreen === 'workspace' ? (
-            <nav className="nav-links" aria-label="Main tabs">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={tab.id === activeTab ? 'nav-tab is-active' : 'nav-tab'}
-                  onClick={() => navigateTo({ tabId: tab.id, screen: 'workspace' })}
-                  aria-pressed={tab.id === activeTab}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
-          ) : (
-            <div className="route-crumb">
-              <button type="button" className="btn btn-secondary" onClick={handleCloseFieldScreen}>
-                Back to fields
-              </button>
-            </div>
-          )}
           <div className="nav-cta" ref={accountMenuRef}>
             <button
               type="button"
@@ -2427,66 +2437,17 @@ export default function App() {
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="nav-toggle"
-            aria-expanded={menuOpen}
-            aria-controls="mobile-menu"
-            onClick={() => setMenuOpen((value) => !value)}
-          >
-            <span className="sr-only">Toggle menu</span>
-            <span className="nav-toggle-bar" />
-            <span className="nav-toggle-bar" />
-            <span className="nav-toggle-bar" />
-          </button>
         </div>
-
-        {menuOpen ? (
-          <div id="mobile-menu" className="mobile-menu">
-            {activeScreen === 'workspace' ? (
-              tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={tab.id === activeTab ? 'mobile-tab is-active' : 'mobile-tab'}
-                  onClick={() => {
-                    navigateTo({ tabId: tab.id, screen: 'workspace' });
-                  }}
-                  aria-pressed={tab.id === activeTab}
-                >
-                  {tab.label}
-                </button>
-              ))
-            ) : (
-              <button
-                type="button"
-                className="mobile-tab"
-                onClick={() => {
-                  handleCloseFieldScreen();
-                  setMenuOpen(false);
-                }}
-              >
-                Back to fields
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn btn-secondary mobile-cta mobile-menu-button"
-              onClick={() => {
-                setMenuOpen(false);
-                handleSwitchFarmer();
-              }}
-            >
-              Switch farmer
-            </button>
-          </div>
-        ) : null}
       </header>
 
       <main className="app-shell">
         <div className="container">
           {activeScreen === 'workspace' ? (
-            <section className="content-card workspace-card">
+            <section
+              className={
+                activeTab === 'fields' ? 'workspace-card' : 'content-card workspace-card'
+              }
+            >
               {activeTab === 'fields' ? (
                 <>
                   <FieldMapPanel
@@ -2540,6 +2501,26 @@ export default function App() {
           )}
         </div>
       </main>
+
+      <nav className="bottom-nav" aria-label="Main tabs">
+        {tabs.map((tab) => {
+          const isActive = activeScreen === 'workspace' && tab.id === activeTab;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={isActive ? 'bottom-tab is-active' : 'bottom-tab'}
+              onClick={() => navigateTo({ tabId: tab.id, screen: 'workspace' })}
+              aria-pressed={isActive}
+            >
+              <span className="bottom-tab-icon-wrap">
+                <TabIcon tabId={tab.id} />
+              </span>
+              <span className="bottom-tab-label">{tab.label}</span>
+            </button>
+          );
+        })}
+      </nav>
     </div>
   );
 }
