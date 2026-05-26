@@ -1809,21 +1809,10 @@ function FieldMapPanel({
 
       {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
-          {!(status === 'ready' && mode === 'overview') ? (
+          {status === 'error' ? (
             <div className="map-status-row">
-              <span className={`status-pill status-${status}`}>
-                {status === 'loading' && 'Loading map'}
-                {status === 'ready' && 'Map ready'}
-                {status === 'error' && 'Map error'}
-              </span>
-              <span className="map-meta" aria-live="polite">
-                {status === 'loading' && 'Connecting to Mapbox...'}
-                {status === 'ready' &&
-                  (isEditingField
-                    ? 'Adjust the field details and save when ready.'
-                    : 'Draw the field boundary and confirm it.')}
-                {status === 'error' && errorMessage}
-              </span>
+              <span className={`status-pill status-${status}`}>Map error</span>
+              <span className="map-meta" aria-live="polite">{errorMessage}</span>
             </div>
           ) : null}
           <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
@@ -2487,29 +2476,29 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </p>
       ) : null}
 
+      {!loadingFields && !MAPBOX_ACCESS_TOKEN ? (
+        <div className="map-state-card" data-testid="maps-setup-needed">
+          <h3>Mapbox setup needed</h3>
+          <p>
+            Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
+            before logging pivot actions on the map.
+          </p>
+        </div>
+      ) : null}
+
+      {!loadingFields && MAPBOX_ACCESS_TOKEN ? (
+        <div className="map-stage actions-map-stage">
+          <div
+            id={mapId}
+            ref={mapRef}
+            className="map-canvas actions-map-canvas"
+            data-testid="actions-map-canvas"
+          />
+        </div>
+      ) : null}
+
       {!loadingFields ? (
         <div className="actions-form">
-          {!MAPBOX_ACCESS_TOKEN ? (
-            <div className="map-state-card" data-testid="maps-setup-needed">
-              <h3>Mapbox setup needed</h3>
-              <p>
-                Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
-                before logging pivot actions on the map.
-              </p>
-            </div>
-          ) : (
-            <div className="actions-map-shell">
-              <div className="map-stage">
-                <div
-                  id={mapId}
-                  ref={mapRef}
-                  className="map-canvas actions-map-canvas"
-                  data-testid="actions-map-canvas"
-                />
-              </div>
-            </div>
-          )}
-
           <label className="auth-label" htmlFor="actions-end-date">
             Action date
           </label>
@@ -2969,7 +2958,9 @@ export default function App() {
           {activeScreen === 'workspace' ? (
             <section
               className={
-                activeTab === 'fields' ? 'workspace-card' : 'content-card workspace-card'
+                activeTab === 'fields' || activeTab === 'actions'
+                  ? 'workspace-card'
+                  : 'content-card workspace-card'
               }
             >
               {activeTab === 'fields' ? (

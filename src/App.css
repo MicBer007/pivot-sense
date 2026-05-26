@@ -909,7 +909,6 @@ code {
   background: var(--paper);
 }
 
-.actions-map-shell,
 .pivot-map-readout {
   display: flex;
   flex-direction: column;
