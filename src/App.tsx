@@ -26,6 +26,7 @@ type LineStringGeometry = {
   type: 'LineString';
   coordinates: Coordinate[];
 };
+type PivotSweepDirection = 1 | -1;
 type MapFeature = {
   type: 'Feature';
   geometry: PolygonGeometry | PointGeometry | LineStringGeometry;
@@ -597,6 +598,7 @@ function buildPivotSweepGeoJson(
   radiusMeters: number | null,
   startAngle: number,
   movementDegrees: number,
+  direction: PivotSweepDirection = 1,
 ): FeatureCollection {
   if (!center || !radiusMeters || radiusMeters <= 0 || movementDegrees <= 0) {
     return {
@@ -610,7 +612,7 @@ function buildPivotSweepGeoJson(
   const ring: Coordinate[] = [center];
 
   for (let index = 0; index <= steps; index += 1) {
-    const angle = startAngle + (normalizedMovement * index) / steps;
+    const angle = startAngle + (direction * normalizedMovement * index) / steps;
     ring.push(getCircleCoordinate(center, radiusMeters, angle));
   }
 
@@ -1906,10 +1908,27 @@ function todayDateString() {
   return `${year}-${month}-${day}`;
 }
 
-function computeClockwiseMovement(startAngle: number, endAngle: number) {
+const PIVOT_DRAG_JITTER_DEGREES = 2;
+const PIVOT_DIRECTION_SWITCH_DEGREES = 12;
+
+function computeSignedAngleDelta(fromAngle: number, toAngle: number) {
+  const from = normalizeAngleDegrees(fromAngle);
+  const to = normalizeAngleDegrees(toAngle);
+  return ((to - from + 540) % 360) - 180;
+}
+
+function computeDirectionalMovement(
+  startAngle: number,
+  endAngle: number,
+  direction: PivotSweepDirection,
+) {
   const start = normalizeAngleDegrees(startAngle);
   const end = normalizeAngleDegrees(endAngle);
-  return (end - start + 360) % 360;
+  return direction === 1 ? (end - start + 360) % 360 : (start - end + 360) % 360;
+}
+
+function computeAngleDistance(angleA: number, angleB: number) {
+  return Math.abs(computeSignedAngleDelta(angleA, angleB));
 }
 
 function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
@@ -1924,6 +1943,9 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const pivotPointerIdRef = useRef<number | null>(null);
   const selectedCircleRef = useRef<{ center: Coordinate; radiusMeters: number } | null>(null);
   const endPivotHandleRef = useRef<Coordinate | null>(null);
+  const lastDragAngleRef = useRef<number | null>(null);
+  const startAngleRef = useRef(0);
+  const dragSweepDirectionRef = useRef<PivotSweepDirection>(1);
   const [selectedFieldId, setSelectedFieldId] = useState('');
   const [mapStatus, setMapStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
@@ -1931,6 +1953,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [, setMapErrorMessage] = useState<string | null>(null);
   const [endDate, setEndDate] = useState<string>(() => todayDateString());
   const [newAngle, setNewAngle] = useState<number>(0);
+  const [dragSweepDirection, setDragSweepDirection] = useState<PivotSweepDirection>(1);
   const [movementOverride, setMovementOverride] = useState<string>('');
   const [mmAppliedRaw, setMmAppliedRaw] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -1940,10 +1963,11 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
   const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
   const startAngle = selectedField?.pivotAngleDegrees ?? 0;
-  const draggedMovement = computeClockwiseMovement(startAngle, newAngle);
+  const draggedMovement = computeDirectionalMovement(startAngle, newAngle, dragSweepDirection);
   const movementDegrees = movementOverride.trim() === ''
     ? draggedMovement
     : Math.max(0, Math.min(360, Math.round(Number(movementOverride) || 0)));
+  const sweepDirection = movementOverride.trim() === '' ? dragSweepDirection : 1;
   const movementPct = movementDegrees / 360;
   const mmAppliedNumber = Number(mmAppliedRaw);
   const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
@@ -1977,10 +2001,17 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         ]
       : [];
 
+  function resetDragMovement(direction: PivotSweepDirection = 1) {
+    lastDragAngleRef.current = null;
+    dragSweepDirectionRef.current = direction;
+    setDragSweepDirection(direction);
+  }
+
   useEffect(() => {
     selectedCircleRef.current = selectedCircle;
     endPivotHandleRef.current = endPivotHandle;
-  }, [selectedCircle, endPivotHandle]);
+    startAngleRef.current = startAngle;
+  }, [selectedCircle, endPivotHandle, startAngle]);
 
   async function loadPivotFields(showLoading = true) {
     if (!currentFarmerId) return;
@@ -2006,6 +2037,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     if (selectedField) {
       setNewAngle(selectedField.pivotAngleDegrees ?? 0);
       setMovementOverride('');
+      resetDragMovement();
     }
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
 
@@ -2103,6 +2135,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         selectedCircle?.radiusMeters ?? null,
         startAngle,
         movementDegrees,
+        sweepDirection,
       ),
     );
     setGeoJsonSourceData(map, ACTION_START_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(selectedPivotEntry));
@@ -2116,6 +2149,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     endPivotEntry,
     startAngle,
     movementDegrees,
+    sweepDirection,
   ]);
 
   useEffect(() => {
@@ -2158,11 +2192,41 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       return map.unproject(point);
     }
 
-    function updatePivotHandleFromLngLat(lngLat: mapboxgl.LngLat) {
+    function updatePivotHandleFromLngLat(lngLat: mapboxgl.LngLat, trackMovement = true) {
       const circle = selectedCircleRef.current;
       if (!circle) return;
-      setNewAngle(getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]));
+      const nextAngle = getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]);
+      const previousAngle = lastDragAngleRef.current;
+      setNewAngle(nextAngle);
       setMovementOverride('');
+
+      if (!trackMovement) {
+        lastDragAngleRef.current = nextAngle;
+        return;
+      }
+
+      if (previousAngle === null) {
+        lastDragAngleRef.current = nextAngle;
+        return;
+      }
+
+      const delta = computeSignedAngleDelta(previousAngle, nextAngle);
+      lastDragAngleRef.current = nextAngle;
+
+      if (Math.abs(delta) < PIVOT_DRAG_JITTER_DEGREES) {
+        return;
+      }
+
+      const wasNearStart =
+        computeAngleDistance(startAngleRef.current, previousAngle) <= PIVOT_DIRECTION_SWITCH_DEGREES;
+      const isNearStart =
+        computeAngleDistance(startAngleRef.current, nextAngle) <= PIVOT_DIRECTION_SWITCH_DEGREES;
+
+      if (wasNearStart || isNearStart) {
+        const nextDirection: PivotSweepDirection = delta < 0 ? -1 : 1;
+        dragSweepDirectionRef.current = nextDirection;
+        setDragSweepDirection(nextDirection);
+      }
     }
 
     function updateCursorFromPointerEvent(event: PointerEvent) {
@@ -2240,12 +2304,16 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       }
 
       event.preventDefault();
+      const circle = selectedCircleRef.current;
+      const pointerLngLat = getLngLatFromPointerEvent(event);
+      const pointerAngle = getPivotAngleDegrees(circle.center, [pointerLngLat.lng, pointerLngLat.lat]);
+      lastDragAngleRef.current = pointerAngle;
       pivotDragActiveRef.current = true;
       pivotPointerIdRef.current = event.pointerId;
       canvas.style.cursor = 'grabbing';
       map.dragPan.disable();
       canvasElement.setPointerCapture(event.pointerId);
-      updatePivotHandleFromLngLat(getLngLatFromPointerEvent(event));
+      updatePivotHandleFromLngLat(pointerLngLat, false);
     }
 
     function handlePointerMove(event: PointerEvent) {
@@ -2431,6 +2499,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                   onClick={() => {
                     setMovementOverride('360');
                     setNewAngle(normalizeAngleDegrees(startAngle));
+                    resetDragMovement();
                   }}
                 >
                   Full sweep (360 deg)
@@ -2441,6 +2510,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                   onClick={() => {
                     setMovementOverride('');
                     setNewAngle(normalizeAngleDegrees(startAngle));
+                    resetDragMovement();
                   }}
                 >
                   Reset to start
