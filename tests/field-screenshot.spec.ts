@@ -4,18 +4,13 @@ import { resolve } from 'node:path';
 
 test('capture add field flow', async ({ page }) => {
   const suffix = Date.now().toString().slice(-6);
-  const firstName = `Field${suffix}`;
-  const surname = `Demo${suffix}`;
-  const password = 'pivotpass123';
+  const farmerName = `Field Demo ${suffix}`;
 
   await page.goto('/');
-  await page.getByLabel('Name', { exact: true }).fill(firstName);
-  await page.getByLabel('Surname', { exact: true }).fill(surname);
-  await page.getByLabel('Password', { exact: true }).fill(password);
-  await page.getByLabel('Confirm password', { exact: true }).fill(password);
+  await page.getByLabel('Name', { exact: true }).fill(farmerName);
   await page
     .locator('form')
-    .getByRole('button', { name: 'Create account', exact: true })
+    .getByRole('button', { name: 'Continue', exact: true })
     .click();
 
   await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible({
@@ -24,6 +19,8 @@ test('capture add field flow', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add field', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Add field', exact: true }).click();
+  await expect(page).toHaveURL(/#add-field$/);
+  await expect(page.getByRole('heading', { name: 'Add field' })).toBeVisible();
   await page.getByLabel('Field name', { exact: true }).fill('North Pivot');
   await expect(page.getByRole('button', { name: 'Circle mode', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Free mode', exact: true })).toBeVisible();

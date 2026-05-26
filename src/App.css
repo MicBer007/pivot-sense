@@ -133,6 +133,17 @@ p {
   justify-content: center;
 }
 
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+}
+
+.route-crumb {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
 .nav-tab {
   border: 1px solid transparent;
   border-radius: var(--radius);
@@ -213,6 +224,42 @@ p {
 
 .mobile-menu-button {
   font: inherit;
+}
+
+.account-switch-button {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.account-switch-button:hover {
+  border-color: var(--text-muted);
+  background: var(--bg-muted);
+  transform: translateY(-1px);
+}
+
+.account-switch-button:focus-visible {
+  outline: 2px solid rgba(47, 125, 59, 0.24);
+  outline-offset: 2px;
+}
+
+.account-switch-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .btn {
@@ -444,6 +491,22 @@ p {
   padding: 1.5rem;
 }
 
+.route-card {
+  min-height: 32rem;
+}
+
+.route-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.route-copy {
+  margin-top: 0.6rem;
+  max-width: 40rem;
+}
+
 .content-header h2,
 .panel-copy h2,
 .map-state-card h3,
@@ -518,12 +581,6 @@ p {
   gap: 0.85rem;
 }
 
-.draw-mode-group {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-
 .draw-help {
   font-size: 0.95rem;
 }
@@ -569,6 +626,74 @@ p {
   border: 1px solid var(--border);
 }
 
+.map-stage {
+  position: relative;
+}
+
+.map-stage.is-drawing .map-canvas {
+  border-color: rgba(47, 125, 59, 0.28);
+  box-shadow: 0 16px 36px rgba(20, 44, 28, 0.1);
+}
+
+.map-draw-controls {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  display: inline-flex;
+  gap: 0.55rem;
+  padding: 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(28, 42, 34, 0.08);
+  box-shadow: 0 12px 26px rgba(16, 24, 20, 0.16);
+}
+
+.map-draw-button {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid rgba(28, 42, 34, 0.12);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.map-draw-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(47, 125, 59, 0.32);
+  color: var(--text);
+}
+
+.map-draw-button.is-active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #ffffff;
+  box-shadow: 0 12px 18px rgba(47, 125, 59, 0.22);
+}
+
+.map-draw-button svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.map-draw-button.is-active svg circle {
+  fill: rgba(255, 255, 255, 0.16);
+}
+
 code {
   background: var(--bg-muted);
   border: 1px solid var(--border);
@@ -580,6 +705,10 @@ code {
 
 @media (max-width: 860px) {
   .nav-links {
+    display: none;
+  }
+
+  .nav-cta {
     display: none;
   }
 
@@ -612,7 +741,12 @@ code {
     flex-direction: column;
   }
 
-  .draw-mode-group {
-    grid-template-columns: 1fr;
+  .route-header {
+    flex-direction: column;
+  }
+
+  .map-draw-controls {
+    left: 0.75rem;
+    bottom: 0.75rem;
   }
 }

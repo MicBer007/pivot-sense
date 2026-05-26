@@ -5,6 +5,7 @@ import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
+type AppScreen = 'workspace' | 'add-field';
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
 type PolygonGeometry = {
@@ -91,6 +92,7 @@ const SAVED_FIELDS_SOURCE_ID = 'saved-fields';
 const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
+const ADD_FIELD_HASH = '#add-field';
 
 function readStoredFarmer() {
   if (typeof window === 'undefined') return null;
@@ -121,6 +123,19 @@ function writeStoredFarmer(farmer: StoredFarmer) {
 function clearStoredFarmer() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(STORED_FARMER_KEY);
+}
+
+function readAppScreenFromHash(): AppScreen {
+  if (typeof window === 'undefined') return 'workspace';
+  return window.location.hash === ADD_FIELD_HASH ? 'add-field' : 'workspace';
+}
+
+function writeAppScreenHash(screen: AppScreen) {
+  if (typeof window === 'undefined') return;
+
+  const nextHash = screen === 'add-field' ? ADD_FIELD_HASH : '';
+  const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+  window.history.pushState(null, '', nextUrl);
 }
 
 function isCoordinate(value: unknown): value is Coordinate {
@@ -398,7 +413,34 @@ function Logo() {
   );
 }
 
-function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
+function AccountSwitchIcon() {
+  return (
+    <svg
+      className="account-switch-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 12.2a3.2 3.2 0 1 0-3.2-3.2 3.2 3.2 0 0 0 3.2 3.2Z" />
+      <path d="M17.4 17.2a5.9 5.9 0 0 0-10.8 0" />
+    </svg>
+  );
+}
+
+function FieldMapPanel({
+  currentFarmerId,
+  mode,
+  onAddField,
+  onCancelAddField,
+  onFieldSaved,
+}: {
+  currentFarmerId: string;
+  mode: 'overview' | 'create';
+  onAddField?: () => void;
+  onCancelAddField?: () => void;
+  onFieldSaved?: (fieldName: string) => void;
+}) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
@@ -410,7 +452,6 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [fieldsLoading, setFieldsLoading] = useState(true);
   const [fieldMessage, setFieldMessage] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
-  const [isAddingField, setIsAddingField] = useState(false);
   const [fieldNameDraft, setFieldNameDraft] = useState('');
   const [drawMode, setDrawMode] = useState<DrawMode>('circle');
   const [freePoints, setFreePoints] = useState<Coordinate[]>([]);
@@ -419,6 +460,7 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [circleRadiusMeters, setCircleRadiusMeters] = useState<number | null>(null);
   const [circleRadiusLocked, setCircleRadiusLocked] = useState(false);
   const [savingField, setSavingField] = useState(false);
+  const isAddingField = mode === 'create';
 
   const freePolygon = freePolygonComplete ? buildFreePolygon(freePoints) : null;
   const circlePolygon =
@@ -443,19 +485,6 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
     setCircleRadiusLocked(false);
     setFieldMessage(null);
     setFieldError(null);
-  }
-
-  function startAddingField() {
-    setIsAddingField(true);
-    setFieldNameDraft('');
-    resetDraftState('circle');
-    setFieldMessage('Enter a field name, then place the boundary on the map.');
-  }
-
-  function cancelAddingField() {
-    setIsAddingField(false);
-    setFieldNameDraft('');
-    resetDraftState('circle');
   }
 
   async function loadFields() {
@@ -533,16 +562,26 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
       return;
     }
 
-    setFieldMessage(`Saved ${fieldNameDraft.trim()}.`);
-    setIsAddingField(false);
+    const savedFieldName = fieldNameDraft.trim();
+    setFieldMessage(`Saved ${savedFieldName}.`);
     setFieldNameDraft('');
     resetDraftState('circle');
     await loadFields();
+    onFieldSaved?.(savedFieldName);
   }
 
   useEffect(() => {
     void loadFields();
   }, [currentFarmerId]);
+
+  useEffect(() => {
+    setFieldNameDraft('');
+    resetDraftState('circle');
+
+    if (mode === 'create') {
+      setFieldMessage('Enter a field name, then place the boundary on the map.');
+    }
+  }, [mode]);
 
   useEffect(() => {
     if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
@@ -720,14 +759,15 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
       <div className="panel-copy field-panel-copy">
         <div>
           <span className="panel-tag">Mapbox</span>
-          <h2>Field map canvas</h2>
+          <h2>{isAddingField ? 'Draw a field boundary' : 'Field map canvas'}</h2>
           <p>
-            Save a named field boundary, then reopen this page to see all fields in
-            view.
+            {isAddingField
+              ? 'Keep the field name in this form, then draw and confirm the boundary on the map.'
+              : 'Saved field boundaries stay here. Start add field to open the dedicated drawing screen.'}
           </p>
         </div>
         {!isAddingField ? (
-          <button type="button" className="btn btn-primary" onClick={startAddingField}>
+          <button type="button" className="btn btn-primary" onClick={onAddField}>
             Add field
           </button>
         ) : null}
@@ -761,22 +801,6 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
               value={fieldNameDraft}
               onChange={(event) => setFieldNameDraft(event.target.value)}
             />
-            <div className="draw-mode-group" role="tablist" aria-label="Boundary mode">
-              <button
-                type="button"
-                className={drawMode === 'circle' ? 'auth-mode-button is-active' : 'auth-mode-button'}
-                onClick={() => resetDraftState('circle')}
-              >
-                Circle mode
-              </button>
-              <button
-                type="button"
-                className={drawMode === 'free' ? 'auth-mode-button is-active' : 'auth-mode-button'}
-                onClick={() => resetDraftState('free')}
-              >
-                Free mode
-              </button>
-            </div>
             <p className="draw-help">
               {drawMode === 'circle'
                 ? 'Circle mode: click once for the center, move to size it, click again to lock the boundary.'
@@ -791,7 +815,7 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
               >
                 {savingField ? 'Saving field...' : 'Confirm boundary'}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={cancelAddingField}>
+              <button type="button" className="btn btn-secondary" onClick={onCancelAddField}>
                 Cancel
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => resetDraftState(drawMode)}>
@@ -841,12 +865,46 @@ function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
               {status === 'error' && errorMessage}
             </span>
           </div>
-          <div
-            id={mapId}
-            ref={mapRef}
-            className="map-canvas"
-            data-testid="mapbox-canvas"
-          />
+          <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
+            <div
+              id={mapId}
+              ref={mapRef}
+              className="map-canvas"
+              data-testid="mapbox-canvas"
+            />
+            {isAddingField ? (
+              <div className="map-draw-controls" role="tablist" aria-label="Boundary mode">
+                <button
+                  type="button"
+                  aria-label="Circle mode"
+                  title="Circle mode"
+                  className={drawMode === 'circle' ? 'map-draw-button is-active' : 'map-draw-button'}
+                  onClick={() => resetDraftState('circle')}
+                >
+                  <span className="sr-only">Circle mode</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="6.5" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Free mode"
+                  title="Free mode"
+                  className={drawMode === 'free' ? 'map-draw-button is-active' : 'map-draw-button'}
+                  onClick={() => resetDraftState('free')}
+                >
+                  <span className="sr-only">Free mode</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 16.5 9 8l5 6 5-7" />
+                    <circle cx="5" cy="16.5" r="1.4" />
+                    <circle cx="9" cy="8" r="1.4" />
+                    <circle cx="14" cy="14" r="1.4" />
+                    <circle cx="19" cy="7" r="1.4" />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -881,6 +939,7 @@ function PlaceholderPanel({ tab }: { tab: TabConfig }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
+  const [activeScreen, setActiveScreen] = useState<AppScreen>(() => readAppScreenFromHash());
   const [menuOpen, setMenuOpen] = useState(false);
   const [appState, setAppState] = useState<AppState>('loading');
   const [farmerNameInput, setFarmerNameInput] = useState('');
@@ -888,8 +947,18 @@ export default function App() {
   const [currentFarmerId, setCurrentFarmerId] = useState('');
   const [farmerMessage, setFarmerMessage] = useState<string | null>(null);
   const [farmerError, setFarmerError] = useState<string | null>(null);
+  const [fieldFlowMessage, setFieldFlowMessage] = useState<string | null>(null);
   const [savingFarmer, setSavingFarmer] = useState(false);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
+
+  useEffect(() => {
+    function handleHashChange() {
+      setActiveScreen(readAppScreenFromHash());
+    }
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     if (!supabaseConfigured || !supabase) {
@@ -998,12 +1067,32 @@ export default function App() {
 
   function handleSwitchFarmer() {
     clearStoredFarmer();
+    writeAppScreenHash('workspace');
     setFarmerMessage(null);
     setFarmerError(null);
+    setFieldFlowMessage(null);
+    setActiveScreen('workspace');
     setCurrentFarmerId('');
     setCurrentFarmerName('');
     setFarmerNameInput('');
     setAppState('signed-out');
+  }
+
+  function handleOpenAddFieldScreen() {
+    setFieldFlowMessage(null);
+    writeAppScreenHash('add-field');
+    setActiveScreen('add-field');
+  }
+
+  function handleCloseAddFieldScreen() {
+    writeAppScreenHash('workspace');
+    setActiveScreen('workspace');
+  }
+
+  function handleFieldSaved(fieldName: string) {
+    setFieldFlowMessage(`Saved ${fieldName}.`);
+    handleCloseAddFieldScreen();
+    setActiveTab('fields');
   }
 
   if (appState === 'loading') {
@@ -1092,22 +1181,36 @@ export default function App() {
         <div className="navbar-inner">
           <Logo />
 
-          <nav className="nav-links" aria-label="Main tabs">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={tab.id === activeTab ? 'nav-tab is-active' : 'nav-tab'}
-                onClick={() => setActiveTab(tab.id)}
-                aria-pressed={tab.id === activeTab}
-              >
-                {tab.label}
+          {activeScreen === 'workspace' ? (
+            <nav className="nav-links" aria-label="Main tabs">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={tab.id === activeTab ? 'nav-tab is-active' : 'nav-tab'}
+                  onClick={() => setActiveTab(tab.id)}
+                  aria-pressed={tab.id === activeTab}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          ) : (
+            <div className="route-crumb">
+              <button type="button" className="btn btn-secondary" onClick={handleCloseAddFieldScreen}>
+                Back to fields
               </button>
-            ))}
-          </nav>
+            </div>
+          )}
           <div className="nav-cta">
-            <button type="button" className="btn btn-secondary" onClick={handleSwitchFarmer}>
-              Switch farmer
+            <button
+              type="button"
+              className="account-switch-button"
+              aria-label="Switch farmer"
+              title="Switch farmer"
+              onClick={handleSwitchFarmer}
+            >
+              <AccountSwitchIcon />
             </button>
           </div>
           <button
@@ -1126,20 +1229,33 @@ export default function App() {
 
         {menuOpen ? (
           <div id="mobile-menu" className="mobile-menu">
-            {tabs.map((tab) => (
+            {activeScreen === 'workspace' ? (
+              tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={tab.id === activeTab ? 'mobile-tab is-active' : 'mobile-tab'}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setMenuOpen(false);
+                  }}
+                  aria-pressed={tab.id === activeTab}
+                >
+                  {tab.label}
+                </button>
+              ))
+            ) : (
               <button
-                key={tab.id}
                 type="button"
-                className={tab.id === activeTab ? 'mobile-tab is-active' : 'mobile-tab'}
+                className="mobile-tab"
                 onClick={() => {
-                  setActiveTab(tab.id);
+                  handleCloseAddFieldScreen();
                   setMenuOpen(false);
                 }}
-                aria-pressed={tab.id === activeTab}
               >
-                {tab.label}
+                Back to fields
               </button>
-            ))}
+            )}
             <button
               type="button"
               className="btn btn-secondary mobile-cta mobile-menu-button"
@@ -1156,43 +1272,82 @@ export default function App() {
 
       <main className="app-shell">
         <div className="container">
-          <section className="hero-card">
-            <div className="hero-copy">
-              <span className="badge">PivotSense</span>
-              <h1>Farmer workspace</h1>
-              <p>
-                Demo farmer workspaces now use a custom farmer table and a cached
-                browser identity instead of Supabase Auth.
-              </p>
-            </div>
-            <div className="account-card">
-              <p className="eyebrow">Farmer</p>
-              <h2>Workspace active</h2>
-              <p>
-                {currentFarmerName || 'Farmer'} is active on this browser. Field data
-                is linked to that farmer record in Supabase.
-              </p>
-              <p className="account-note">
-                This is a lightweight demo flow and does not provide real account
-                security.
-              </p>
-            </div>
-          </section>
+          {activeScreen === 'workspace' ? (
+            <>
+              <section className="hero-card">
+                <div className="hero-copy">
+                  <span className="badge">PivotSense</span>
+                  <h1>Farmer workspace</h1>
+                  <p>
+                    Demo farmer workspaces now use a custom farmer table and a cached
+                    browser identity instead of Supabase Auth.
+                  </p>
+                </div>
+                <div className="account-card">
+                  <p className="eyebrow">Farmer</p>
+                  <h2>Workspace active</h2>
+                  <p>
+                    {currentFarmerName || 'Farmer'} is active on this browser. Field data
+                    is linked to that farmer record in Supabase.
+                  </p>
+                  <p className="account-note">
+                    This is a lightweight demo flow and does not provide real account
+                    security.
+                  </p>
+                </div>
+              </section>
 
-          <section className="content-card" aria-labelledby="tab-title">
-            <header className="content-header">
-              <div>
-                <p className="eyebrow">Current tab</p>
-                <h2 id="tab-title">{activeConfig.title}</h2>
-              </div>
-            </header>
+              <section className="content-card" aria-labelledby="tab-title">
+                <header className="content-header">
+                  <div>
+                    <p className="eyebrow">Current tab</p>
+                    <h2 id="tab-title">{activeConfig.title}</h2>
+                  </div>
+                </header>
 
-            {activeTab === 'fields' ? (
-              <FieldMapPanel currentFarmerId={currentFarmerId} />
-            ) : (
-              <PlaceholderPanel tab={activeConfig} />
-            )}
-          </section>
+                {activeTab === 'fields' ? (
+                  <>
+                    <FieldMapPanel
+                      key="fields-overview"
+                      currentFarmerId={currentFarmerId}
+                      mode="overview"
+                      onAddField={handleOpenAddFieldScreen}
+                    />
+                    {fieldFlowMessage ? (
+                      <p className="auth-feedback auth-feedback-success" aria-live="polite">
+                        {fieldFlowMessage}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <PlaceholderPanel tab={activeConfig} />
+                )}
+              </section>
+            </>
+          ) : (
+            <section className="content-card route-card" aria-labelledby="field-route-title">
+              <header className="content-header route-header">
+                <div>
+                  <p className="eyebrow">Field setup</p>
+                  <h2 id="field-route-title">Add field</h2>
+                  <p className="route-copy">
+                    Draw and save a field for {currentFarmerName || 'this farmer'} on a separate screen.
+                  </p>
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={handleCloseAddFieldScreen}>
+                  Back to fields
+                </button>
+              </header>
+
+              <FieldMapPanel
+                key="field-create"
+                currentFarmerId={currentFarmerId}
+                mode="create"
+                onCancelAddField={handleCloseAddFieldScreen}
+                onFieldSaved={handleFieldSaved}
+              />
+            </section>
+          )}
         </div>
       </main>
     </div>
