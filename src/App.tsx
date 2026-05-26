@@ -365,6 +365,12 @@ function getCircleCoordinate(
   ];
 }
 
+function computeDefaultPivotRadius(map: mapboxgl.Map, centerPoint: mapboxgl.Point): number {
+  const centerLngLat = map.unproject(centerPoint);
+  const offsetLngLat = map.unproject(new mapboxgl.Point(centerPoint.x + 80, centerPoint.y));
+  return centerLngLat.distanceTo(offsetLngLat);
+}
+
 function getPivotAngleDegrees(center: Coordinate, target: Coordinate) {
   const deltaLng = target[0] - center[0];
   const deltaLat = target[1] - center[1];
@@ -995,8 +1001,15 @@ function FieldMapPanel({
     setFieldsLoading(false);
   }
 
-  function updatePivotAngleFromLngLat(center: Coordinate, lngLat: mapboxgl.LngLat) {
+  function updatePivotHandleFromLngLat(center: Coordinate, lngLat: mapboxgl.LngLat) {
     setPivotAngleDraft(getPivotAngleDegrees(center, [lngLat.lng, lngLat.lat]));
+    if (isEditingFieldRef.current) {
+      return;
+    }
+    const radius = new mapboxgl.LngLat(center[0], center[1]).distanceTo(lngLat);
+    if (radius >= 5) {
+      setCircleRadiusMeters(radius);
+    }
   }
 
   async function handleConfirmBoundary() {
@@ -1328,47 +1341,26 @@ function FieldMapPanel({
       }
 
       if (!circleCenter) {
-        setCircleCenter([event.lngLat.lng, event.lngLat.lat]);
-        setCircleRadiusMeters(null);
-        setCircleRadiusLocked(false);
-        setFieldMessage('Move the pointer to size the circle, then click again to lock it.');
+        const center: Coordinate = [event.lngLat.lng, event.lngLat.lat];
+        const defaultRadius = computeDefaultPivotRadius(map, event.point);
+        setCircleCenter(center);
+        setCircleRadiusMeters(defaultRadius);
+        setCircleRadiusLocked(true);
+        setPivotAngleDraft(0);
+        setFieldMessage('Drag the orange handle to size the pivot and set the angle, then confirm.');
         return;
       }
-
-      if (circleRadiusLocked) {
-        return;
-      }
-
-      const radius = new mapboxgl.LngLat(circleCenter[0], circleCenter[1]).distanceTo(
-        event.lngLat,
-      );
-      setCircleRadiusMeters(radius);
-      updatePivotAngleFromLngLat(circleCenter, event.lngLat);
-      setCircleRadiusLocked(true);
-      setFieldMessage('Circle ready. Drag the pivot arm around the circle, then confirm the boundary.');
     }
 
     function handleMouseMove(event: mapboxgl.MapMouseEvent) {
       const activePivotCenter = activePivotCenterRef.current;
       if (pivotDragActiveRef.current && activePivotCenter) {
         canvas.style.cursor = 'grabbing';
-        updatePivotAngleFromLngLat(activePivotCenter, event.lngLat);
+        updatePivotHandleFromLngLat(activePivotCenter, event.lngLat);
         return;
       }
 
       const isAddingField = isAddingFieldRef.current;
-      const drawMode = drawModeRef.current;
-      const circleCenter = circleCenterRef.current;
-      const circleRadiusLocked = circleRadiusLockedRef.current;
-      if (isAddingField && drawMode === 'circle' && circleCenter && !circleRadiusLocked) {
-        const radius = new mapboxgl.LngLat(circleCenter[0], circleCenter[1]).distanceTo(
-          event.lngLat,
-        );
-        setCircleRadiusMeters(radius);
-        canvas.style.cursor = 'crosshair';
-        return;
-      }
-
       if (!isAddingField && !isEditingField) {
         const features = map.queryRenderedFeatures(event.point, {
           layers: ['saved-fields-fill', 'saved-fields-line'],
@@ -1431,7 +1423,7 @@ function FieldMapPanel({
       map.dragPan.disable();
       canvasElement.setPointerCapture(event.pointerId);
       const lngLat = getLngLatFromPointerEvent(event);
-      updatePivotAngleFromLngLat(activePivotCenter, lngLat);
+      updatePivotHandleFromLngLat(activePivotCenter, lngLat);
       setFieldMessage('Dragging pivot arm. Release to keep the current position.');
     }
 
@@ -1445,7 +1437,7 @@ function FieldMapPanel({
         event.preventDefault();
         canvas.style.cursor = 'grabbing';
         const lngLat = getLngLatFromPointerEvent(event);
-        updatePivotAngleFromLngLat(activePivotCenter, lngLat);
+        updatePivotHandleFromLngLat(activePivotCenter, lngLat);
         return;
       }
 
