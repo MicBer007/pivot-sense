@@ -19,11 +19,15 @@ test('capture add field flow', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add field', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Add field', exact: true }).click();
-  await expect(page).toHaveURL(/#add-field$/);
+  await expect(page).toHaveURL(/\/fields\/add$/);
   await expect(page.getByRole('heading', { name: 'Add field' })).toBeVisible();
   await page.getByLabel('Field name', { exact: true }).fill('North Pivot');
+  await expect(page.getByText('Pervits field', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Current pivot alignment', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Circle mode', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Free mode', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Free mode', exact: true }).click();
+  await expect(page.getByText('Normal field', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Confirm boundary', exact: true })).toBeVisible();
 
   const dir = resolve('screenshots');

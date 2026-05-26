@@ -6,8 +6,22 @@ import { supabase, supabaseConfigured } from './supabase';
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
 type AppScreen = 'workspace' | 'add-field';
+type AppRoute = {
+  tabId: TabId;
+  screen: AppScreen;
+};
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
+type FieldType = 'pervits' | 'normal';
+type PivotAlignment =
+  | 'north'
+  | 'north-east'
+  | 'east'
+  | 'south-east'
+  | 'south'
+  | 'south-west'
+  | 'west'
+  | 'north-west';
 type PolygonGeometry = {
   type: 'Polygon';
   coordinates: Coordinate[][];
@@ -25,11 +39,15 @@ type FieldRecord = {
   id: string;
   fieldName: string;
   boundary: PolygonGeometry;
+  fieldType: FieldType;
+  pivotAlignment: PivotAlignment | null;
 };
 type RpcFieldRow = {
   id: string;
   field_name: string;
   boundary: unknown;
+  field_type?: string | null;
+  pivot_alignment?: string | null;
 };
 type RpcFarmerRow = {
   id: string;
@@ -92,7 +110,23 @@ const SAVED_FIELDS_SOURCE_ID = 'saved-fields';
 const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
-const ADD_FIELD_HASH = '#add-field';
+const TAB_ROOT_PATHS: Record<TabId, string> = {
+  overview: '/overview',
+  insights: '/insights',
+  alerts: '/alerts',
+  fields: '/fields',
+};
+const ADD_FIELD_PATH = '/fields/add';
+const PIVOT_ALIGNMENT_OPTIONS: { value: PivotAlignment; label: string }[] = [
+  { value: 'north', label: 'North' },
+  { value: 'north-east', label: 'North-east' },
+  { value: 'east', label: 'East' },
+  { value: 'south-east', label: 'South-east' },
+  { value: 'south', label: 'South' },
+  { value: 'south-west', label: 'South-west' },
+  { value: 'west', label: 'West' },
+  { value: 'north-west', label: 'North-west' },
+];
 
 function readStoredFarmer() {
   if (typeof window === 'undefined') return null;
@@ -125,17 +159,47 @@ function clearStoredFarmer() {
   window.localStorage.removeItem(STORED_FARMER_KEY);
 }
 
-function readAppScreenFromHash(): AppScreen {
-  if (typeof window === 'undefined') return 'workspace';
-  return window.location.hash === ADD_FIELD_HASH ? 'add-field' : 'workspace';
+function normalizePathname(pathname: string) {
+  if (!pathname || pathname === '/') return '/';
+  return pathname.replace(/\/+$/, '') || '/';
 }
 
-function writeAppScreenHash(screen: AppScreen) {
+function readAppRouteFromLocation(): AppRoute {
+  if (typeof window === 'undefined') {
+    return { tabId: 'fields', screen: 'workspace' };
+  }
+
+  const pathname = normalizePathname(window.location.pathname);
+  switch (pathname) {
+    case '/':
+    case '/fields':
+      return { tabId: 'fields', screen: 'workspace' };
+    case '/fields/add':
+      return { tabId: 'fields', screen: 'add-field' };
+    case '/overview':
+      return { tabId: 'overview', screen: 'workspace' };
+    case '/insights':
+      return { tabId: 'insights', screen: 'workspace' };
+    case '/alerts':
+      return { tabId: 'alerts', screen: 'workspace' };
+    default:
+      return { tabId: 'fields', screen: 'workspace' };
+  }
+}
+
+function buildRoutePath(route: AppRoute) {
+  return route.screen === 'add-field' ? ADD_FIELD_PATH : TAB_ROOT_PATHS[route.tabId];
+}
+
+function writeAppRoute(route: AppRoute, replace = false) {
   if (typeof window === 'undefined') return;
 
-  const nextHash = screen === 'add-field' ? ADD_FIELD_HASH : '';
-  const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
-  window.history.pushState(null, '', nextUrl);
+  const nextPath = buildRoutePath(route);
+  const nextUrl = `${nextPath}${window.location.search}`;
+  const currentUrl = `${normalizePathname(window.location.pathname)}${window.location.search}`;
+  if (nextUrl === currentUrl) return;
+
+  window.history[replace ? 'replaceState' : 'pushState'](null, '', nextUrl);
 }
 
 function isCoordinate(value: unknown): value is Coordinate {
@@ -208,6 +272,25 @@ function parseBoundary(value: unknown): PolygonGeometry | null {
   return null;
 }
 
+function parseFieldType(value: unknown): FieldType {
+  return value === 'pervits' ? 'pervits' : 'normal';
+}
+
+function parsePivotAlignment(value: unknown): PivotAlignment | null {
+  return PIVOT_ALIGNMENT_OPTIONS.some((option) => option.value === value)
+    ? (value as PivotAlignment)
+    : null;
+}
+
+function formatFieldType(fieldType: FieldType) {
+  return fieldType === 'pervits' ? 'Pervits' : 'Normal';
+}
+
+function formatPivotAlignment(alignment: PivotAlignment | null) {
+  if (!alignment) return null;
+  return PIVOT_ALIGNMENT_OPTIONS.find((option) => option.value === alignment)?.label ?? alignment;
+}
+
 function getPolygonBounds(polygon: PolygonGeometry) {
   const bounds = new mapboxgl.LngLatBounds();
   polygon.coordinates[0].forEach(([lng, lat]) => bounds.extend([lng, lat]));
@@ -244,6 +327,12 @@ function buildSavedFieldsGeoJson(fields: FieldRecord[]): FeatureCollection {
       properties: {
         id: field.id,
         fieldName: field.fieldName,
+        fieldType: formatFieldType(field.fieldType),
+        pivotAlignment: formatPivotAlignment(field.pivotAlignment),
+        mapLabel:
+          field.fieldType === 'pervits' && field.pivotAlignment
+            ? `${field.fieldName} · Pervits · ${formatPivotAlignment(field.pivotAlignment)}`
+            : `${field.fieldName} · Normal`,
       },
       geometry: field.boundary,
     })),
@@ -338,6 +427,25 @@ function ensureMapLayers(map: mapboxgl.Map) {
       paint: {
         'line-color': '#1f5d2b',
         'line-width': 2,
+      },
+    });
+  }
+
+  if (!map.getLayer('saved-fields-label')) {
+    map.addLayer({
+      id: 'saved-fields-label',
+      type: 'symbol',
+      source: SAVED_FIELDS_SOURCE_ID,
+      layout: {
+        'text-field': ['get', 'mapLabel'],
+        'text-size': 11,
+        'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+        'text-offset': [0, 0],
+      },
+      paint: {
+        'text-color': '#16351e',
+        'text-halo-color': '#f7fbf7',
+        'text-halo-width': 1.2,
       },
     });
   }
@@ -454,6 +562,7 @@ function FieldMapPanel({
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [fieldNameDraft, setFieldNameDraft] = useState('');
   const [drawMode, setDrawMode] = useState<DrawMode>('circle');
+  const [pivotAlignmentDraft, setPivotAlignmentDraft] = useState<PivotAlignment>('north');
   const [freePoints, setFreePoints] = useState<Coordinate[]>([]);
   const [freePolygonComplete, setFreePolygonComplete] = useState(false);
   const [circleCenter, setCircleCenter] = useState<Coordinate | null>(null);
@@ -461,6 +570,7 @@ function FieldMapPanel({
   const [circleRadiusLocked, setCircleRadiusLocked] = useState(false);
   const [savingField, setSavingField] = useState(false);
   const isAddingField = mode === 'create';
+  const draftFieldType: FieldType = drawMode === 'circle' ? 'pervits' : 'normal';
 
   const freePolygon = freePolygonComplete ? buildFreePolygon(freePoints) : null;
   const circlePolygon =
@@ -478,6 +588,7 @@ function FieldMapPanel({
 
   function resetDraftState(nextMode: DrawMode = drawMode) {
     setDrawMode(nextMode);
+    setPivotAlignmentDraft('north');
     setFreePoints([]);
     setFreePolygonComplete(false);
     setCircleCenter(null);
@@ -516,6 +627,8 @@ function FieldMapPanel({
           id: record.id,
           fieldName: record.field_name,
           boundary,
+          fieldType: parseFieldType(record.field_type),
+          pivotAlignment: parsePivotAlignment(record.pivot_alignment),
         } satisfies FieldRecord;
       })
       .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field));
@@ -545,6 +658,11 @@ function FieldMapPanel({
       return;
     }
 
+    if (draftFieldType === 'pervits' && !pivotAlignmentDraft) {
+      setFieldError('Choose the current pivot alignment before confirming the boundary.');
+      return;
+    }
+
     setSavingField(true);
     setFieldError(null);
     setFieldMessage(null);
@@ -553,6 +671,8 @@ function FieldMapPanel({
       input_farmer_id: currentFarmerId,
       input_field_name: fieldNameDraft.trim(),
       input_boundary: draftPolygon,
+      input_field_type: draftFieldType,
+      input_pivot_alignment: draftFieldType === 'pervits' ? pivotAlignmentDraft : null,
     });
 
     setSavingField(false);
@@ -756,16 +876,8 @@ function FieldMapPanel({
 
   return (
     <section className="map-panel">
-      <div className="panel-copy field-panel-copy">
-        <div>
-          <span className="panel-tag">Mapbox</span>
-          <h2>{isAddingField ? 'Draw a field boundary' : 'Field map canvas'}</h2>
-          <p>
-            {isAddingField
-              ? 'Keep the field name in this form, then draw and confirm the boundary on the map.'
-              : 'Saved field boundaries stay here. Start add field to open the dedicated drawing screen.'}
-          </p>
-        </div>
+      <div className="field-panel-copy">
+        {!isAddingField ? <h2 className="field-panel-title">Field boundaries</h2> : null}
         {!isAddingField ? (
           <button type="button" className="btn btn-primary" onClick={onAddField}>
             Add field
@@ -803,9 +915,36 @@ function FieldMapPanel({
             />
             <p className="draw-help">
               {drawMode === 'circle'
-                ? 'Circle mode: click once for the center, move to size it, click again to lock the boundary.'
+                ? 'Circle mode creates a Pervits field: click once for the center, move to size it, click again to lock the boundary.'
                 : 'Free mode: click each boundary point, then click the first point to close the field.'}
             </p>
+            <div className="field-meta-banner" aria-live="polite">
+              <span className="field-type-pill">{formatFieldType(draftFieldType)} field</span>
+              {draftFieldType === 'pervits' ? (
+                <span className="field-meta-copy">Set the pivot arm alignment before saving.</span>
+              ) : (
+                <span className="field-meta-copy">Free mode saves this as a normal field.</span>
+              )}
+            </div>
+            {draftFieldType === 'pervits' ? (
+              <>
+                <label className="auth-label" htmlFor="pivot-alignment">
+                  Current pivot alignment
+                </label>
+                <select
+                  id="pivot-alignment"
+                  className="auth-input"
+                  value={pivotAlignmentDraft}
+                  onChange={(event) => setPivotAlignmentDraft(event.target.value as PivotAlignment)}
+                >
+                  {PIVOT_ALIGNMENT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
             <div className="field-action-row">
               <button
                 type="button"
@@ -848,6 +987,21 @@ function FieldMapPanel({
               ? `The map zooms to ${fields[0].fieldName}.`
               : 'The map zooms to include every saved field.'}
           </p>
+          <div className="field-summary-list">
+            {fields.map((field) => (
+              <article key={field.id} className="field-summary-card">
+                <div className="field-summary-header">
+                  <strong>{field.fieldName}</strong>
+                  <span className="field-type-pill">{formatFieldType(field.fieldType)}</span>
+                </div>
+                <p className="field-summary-meta">
+                  {field.fieldType === 'pervits'
+                    ? `Pivot alignment: ${formatPivotAlignment(field.pivotAlignment) ?? 'Not set'}`
+                    : 'No pivot alignment tracked for normal fields.'}
+                </p>
+              </article>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -869,7 +1023,7 @@ function FieldMapPanel({
             <div
               id={mapId}
               ref={mapRef}
-              className="map-canvas"
+              className={isAddingField ? 'map-canvas' : 'map-canvas map-canvas-overview'}
               data-testid="mapbox-canvas"
             />
             {isAddingField ? (
@@ -925,21 +1079,15 @@ function FieldMapPanel({
 
 function PlaceholderPanel({ tab }: { tab: TabConfig }) {
   return (
-    <section className="placeholder-panel">
-      <div className="panel-copy">
-        <span className="panel-tag">
-          Tab {tabs.findIndex(({ id }) => id === tab.id) + 1}
-        </span>
-        <h2>{tab.title}</h2>
-        <p>{tab.description}</p>
-      </div>
+    <section className="placeholder-panel" aria-labelledby={`${tab.id}-placeholder-title`}>
+      <h2 id={`${tab.id}-placeholder-title`}>{tab.label}</h2>
+      <p>{tab.description}</p>
     </section>
   );
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('fields');
-  const [activeScreen, setActiveScreen] = useState<AppScreen>(() => readAppScreenFromHash());
+  const [route, setRoute] = useState<AppRoute>(() => readAppRouteFromLocation());
   const [menuOpen, setMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [appState, setAppState] = useState<AppState>('loading');
@@ -951,16 +1099,23 @@ export default function App() {
   const [fieldFlowMessage, setFieldFlowMessage] = useState<string | null>(null);
   const [savingFarmer, setSavingFarmer] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
-  const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
+  const activeTab = route.tabId;
+  const activeScreen = route.screen;
 
   useEffect(() => {
-    function handleHashChange() {
-      setActiveScreen(readAppScreenFromHash());
+    function handleLocationChange() {
+      setRoute(readAppRouteFromLocation());
     }
 
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleLocationChange);
+    return () => window.removeEventListener('popstate', handleLocationChange);
   }, []);
+
+  function navigateTo(nextRoute: AppRoute, replace = false) {
+    writeAppRoute(nextRoute, replace);
+    setRoute(nextRoute);
+    setMenuOpen(false);
+  }
 
   useEffect(() => {
     if (!supabaseConfigured || !supabase) {
@@ -1041,6 +1196,16 @@ export default function App() {
     };
   }, [accountMenuOpen]);
 
+  useEffect(() => {
+    if (appState !== 'signed-in' || typeof window === 'undefined') return;
+
+    const currentPath = normalizePathname(window.location.pathname);
+    const expectedPath = buildRoutePath(route);
+    if (currentPath !== expectedPath) {
+      writeAppRoute(route, true);
+    }
+  }, [appState, route]);
+
   async function handleFarmerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1094,11 +1259,10 @@ export default function App() {
   function handleSwitchFarmer() {
     setAccountMenuOpen(false);
     clearStoredFarmer();
-    writeAppScreenHash('workspace');
+    navigateTo({ tabId: 'fields', screen: 'workspace' }, true);
     setFarmerMessage(null);
     setFarmerError(null);
     setFieldFlowMessage(null);
-    setActiveScreen('workspace');
     setCurrentFarmerId('');
     setCurrentFarmerName('');
     setFarmerNameInput('');
@@ -1108,20 +1272,17 @@ export default function App() {
   function handleOpenAddFieldScreen() {
     setAccountMenuOpen(false);
     setFieldFlowMessage(null);
-    writeAppScreenHash('add-field');
-    setActiveScreen('add-field');
+    navigateTo({ tabId: 'fields', screen: 'add-field' });
   }
 
   function handleCloseAddFieldScreen() {
     setAccountMenuOpen(false);
-    writeAppScreenHash('workspace');
-    setActiveScreen('workspace');
+    navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
   function handleFieldSaved(fieldName: string) {
     setFieldFlowMessage(`Saved ${fieldName}.`);
-    handleCloseAddFieldScreen();
-    setActiveTab('fields');
+    navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
   if (appState === 'loading') {
@@ -1217,7 +1378,7 @@ export default function App() {
                   key={tab.id}
                   type="button"
                   className={tab.id === activeTab ? 'nav-tab is-active' : 'nav-tab'}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => navigateTo({ tabId: tab.id, screen: 'workspace' })}
                   aria-pressed={tab.id === activeTab}
                 >
                   {tab.label}
@@ -1279,8 +1440,7 @@ export default function App() {
                   type="button"
                   className={tab.id === activeTab ? 'mobile-tab is-active' : 'mobile-tab'}
                   onClick={() => {
-                    setActiveTab(tab.id);
-                    setMenuOpen(false);
+                    navigateTo({ tabId: tab.id, screen: 'workspace' });
                   }}
                   aria-pressed={tab.id === activeTab}
                 >
@@ -1316,57 +1476,25 @@ export default function App() {
       <main className="app-shell">
         <div className="container">
           {activeScreen === 'workspace' ? (
-            <>
-              <section className="hero-card">
-                <div className="hero-copy">
-                  <span className="badge">PivotSense</span>
-                  <h1>Farmer workspace</h1>
-                  <p>
-                    Demo farmer workspaces now use a custom farmer table and a cached
-                    browser identity instead of Supabase Auth.
-                  </p>
-                </div>
-                <div className="account-card">
-                  <p className="eyebrow">Farmer</p>
-                  <h2>Workspace active</h2>
-                  <p>
-                    {currentFarmerName || 'Farmer'} is active on this browser. Field data
-                    is linked to that farmer record in Supabase.
-                  </p>
-                  <p className="account-note">
-                    This is a lightweight demo flow and does not provide real account
-                    security.
-                  </p>
-                </div>
-              </section>
-
-              <section className="content-card" aria-labelledby="tab-title">
-                <header className="content-header">
-                  <div>
-                    <p className="eyebrow">Current tab</p>
-                    <h2 id="tab-title">{activeConfig.title}</h2>
-                  </div>
-                </header>
-
-                {activeTab === 'fields' ? (
-                  <>
-                    <FieldMapPanel
-                      key="fields-overview"
-                      currentFarmerId={currentFarmerId}
-                      mode="overview"
-                      onAddField={handleOpenAddFieldScreen}
-                    />
-                    {fieldFlowMessage ? (
-                      <p className="auth-feedback auth-feedback-success" aria-live="polite">
-                        {fieldFlowMessage}
-                      </p>
-                    ) : null}
-                  </>
-                ) : (
-                  <PlaceholderPanel tab={activeConfig} />
-                )}
-              </section>
-            </>
+            <section className="content-card workspace-card">
+              {activeTab === 'fields' ? (
+                <>
+                  <FieldMapPanel
+                    key="fields-overview"
+                    currentFarmerId={currentFarmerId}
+                    mode="overview"
+                    onAddField={handleOpenAddFieldScreen}
+                  />
+                  {fieldFlowMessage ? (
+                    <p className="auth-feedback auth-feedback-success" aria-live="polite">
+                      {fieldFlowMessage}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <PlaceholderPanel tab={tabs.find(({ id }) => id === activeTab) ?? tabs[0]} />
+              )}
+            </section>
           ) : (
             <section className="content-card route-card" aria-labelledby="field-route-title">
               <header className="content-header route-header">

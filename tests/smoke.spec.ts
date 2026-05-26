@@ -41,3 +41,25 @@ test('farmer can open a workspace with a single name field', async ({ page }) =>
     page.getByRole('heading', { name: 'Open your farmer workspace' }),
   ).toBeVisible();
 });
+
+test('navbar tabs navigate to their route roots', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByLabel('Name', { exact: true }).fill(`Farmer ${Date.now()}`);
+  await page.locator('form').getByRole('button', { name: 'Continue', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible();
+  await expect(page).toHaveURL(/\/fields$/);
+
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+
+  await page.getByRole('button', { name: 'Insights', exact: true }).click();
+  await expect(page).toHaveURL(/\/insights$/);
+
+  await page.getByRole('button', { name: 'Alerts', exact: true }).click();
+  await expect(page).toHaveURL(/\/alerts$/);
+
+  await page.getByRole('button', { name: 'Fields', exact: true }).click();
+  await expect(page).toHaveURL(/\/fields$/);
+});
