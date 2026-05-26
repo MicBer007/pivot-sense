@@ -643,6 +643,52 @@ p {
   font-weight: 700;
 }
 
+.field-summary-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.field-summary-card {
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.field-summary-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-summary-meta {
+  margin: 0.45rem 0 0;
+  color: var(--text-muted);
+}
+
+.field-summary-actions {
+  margin-top: 0.8rem;
+}
+
+.pivot-angle-readout {
+  margin: 0;
+  color: var(--text);
+}
+
+.btn-danger {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fff5f5;
+}
+
+.btn-danger:hover {
+  border-color: #fca5a5;
+  background: #fee2e2;
+}
+
 .map-canvas {
   min-height: 26rem;
   border-radius: var(--radius-lg);
