@@ -524,6 +524,10 @@ p {
   padding: 1.5rem;
 }
 
+.workspace-card {
+  padding-top: 1.1rem;
+}
+
 .route-card {
   min-height: 32rem;
 }
@@ -541,7 +545,7 @@ p {
 }
 
 .content-header h2,
-.panel-copy h2,
+.placeholder-panel h2,
 .map-state-card h3,
 .auth-state-card h3 {
   margin: 0;
@@ -555,7 +559,7 @@ p {
   padding: 0;
 }
 
-.panel-copy p,
+.placeholder-panel p,
 .map-state-card p,
 .map-meta {
   color: var(--text-muted);
@@ -563,9 +567,16 @@ p {
 
 .field-panel-copy {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 1rem;
   align-items: end;
+}
+
+.field-panel-title {
+  margin: 0;
+  margin-right: auto;
+  color: var(--text);
+  font-size: 1.1rem;
 }
 
 .placeholder-panel,
@@ -580,9 +591,9 @@ p {
 }
 
 .placeholder-panel {
-  min-height: 18rem;
-  display: flex;
-  align-items: center;
+  min-height: 10rem;
+  display: grid;
+  gap: 0.6rem;
   padding: 1.25rem;
   border-radius: var(--radius-lg);
   background: var(--bg-muted);
@@ -624,6 +635,60 @@ p {
   gap: 0.65rem;
 }
 
+.field-meta-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.field-type-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: #e5f5e8;
+  color: #1f5d2b;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.field-meta-copy {
+  color: var(--text-muted);
+  font-size: 0.94rem;
+}
+
+.pivot-angle-readout {
+  margin: 0;
+  color: var(--text);
+}
+
+.field-summary-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.field-summary-card {
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.field-summary-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-summary-meta {
+  margin: 0.45rem 0 0;
+  color: var(--text-muted);
+}
+
 .map-status-row {
   display: flex;
   flex-wrap: wrap;
@@ -657,6 +722,10 @@ p {
   overflow: hidden;
   background: var(--bg-muted);
   border: 1px solid var(--border);
+}
+
+.map-canvas-overview {
+  min-height: 34rem;
 }
 
 .map-stage {
@@ -767,6 +836,10 @@ code {
 
   .map-canvas {
     min-height: 21rem;
+  }
+
+  .map-canvas-overview {
+    min-height: 27rem;
   }
 
   .field-panel-copy {

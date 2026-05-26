@@ -12,23 +12,22 @@ type AppRoute = {
 };
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
-type FieldType = 'pervits' | 'normal';
-type PivotAlignment =
-  | 'north'
-  | 'north-east'
-  | 'east'
-  | 'south-east'
-  | 'south'
-  | 'south-west'
-  | 'west'
-  | 'north-west';
+type FieldType = 'pivot' | 'normal';
 type PolygonGeometry = {
   type: 'Polygon';
   coordinates: Coordinate[][];
 };
+type PointGeometry = {
+  type: 'Point';
+  coordinates: Coordinate;
+};
+type LineStringGeometry = {
+  type: 'LineString';
+  coordinates: Coordinate[];
+};
 type MapFeature = {
   type: 'Feature';
-  geometry: PolygonGeometry | { type: 'Point'; coordinates: Coordinate };
+  geometry: PolygonGeometry | PointGeometry | LineStringGeometry;
   properties: Record<string, unknown>;
 };
 type FeatureCollection = {
@@ -40,14 +39,14 @@ type FieldRecord = {
   fieldName: string;
   boundary: PolygonGeometry;
   fieldType: FieldType;
-  pivotAlignment: PivotAlignment | null;
+  pivotAngleDegrees: number | null;
 };
 type RpcFieldRow = {
   id: string;
   field_name: string;
   boundary: unknown;
   field_type?: string | null;
-  pivot_alignment?: string | null;
+  pivot_angle_degrees?: number | null;
 };
 type RpcFarmerRow = {
   id: string;
@@ -109,6 +108,8 @@ const DEFAULT_ZOOM = Number(import.meta.env.VITE_MAPBOX_DEFAULT_ZOOM ?? 5);
 const SAVED_FIELDS_SOURCE_ID = 'saved-fields';
 const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
+const SAVED_PIVOT_SOURCE_ID = 'saved-pivot';
+const DRAFT_PIVOT_SOURCE_ID = 'draft-pivot';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
 const TAB_ROOT_PATHS: Record<TabId, string> = {
   overview: '/overview',
@@ -117,16 +118,6 @@ const TAB_ROOT_PATHS: Record<TabId, string> = {
   fields: '/fields',
 };
 const ADD_FIELD_PATH = '/fields/add';
-const PIVOT_ALIGNMENT_OPTIONS: { value: PivotAlignment; label: string }[] = [
-  { value: 'north', label: 'North' },
-  { value: 'north-east', label: 'North-east' },
-  { value: 'east', label: 'East' },
-  { value: 'south-east', label: 'South-east' },
-  { value: 'south', label: 'South' },
-  { value: 'south-west', label: 'South-west' },
-  { value: 'west', label: 'West' },
-  { value: 'north-west', label: 'North-west' },
-];
 
 function readStoredFarmer() {
   if (typeof window === 'undefined') return null;
@@ -273,22 +264,117 @@ function parseBoundary(value: unknown): PolygonGeometry | null {
 }
 
 function parseFieldType(value: unknown): FieldType {
-  return value === 'pervits' ? 'pervits' : 'normal';
+  return value === 'pivot' || value === 'pervits' ? 'pivot' : 'normal';
 }
 
-function parsePivotAlignment(value: unknown): PivotAlignment | null {
-  return PIVOT_ALIGNMENT_OPTIONS.some((option) => option.value === value)
-    ? (value as PivotAlignment)
-    : null;
+function normalizeAngleDegrees(value: number) {
+  const normalized = Math.round(value) % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
 }
 
 function formatFieldType(fieldType: FieldType) {
-  return fieldType === 'pervits' ? 'Pervits' : 'Normal';
+  return fieldType === 'pivot' ? 'Pivots' : 'Normal';
 }
 
-function formatPivotAlignment(alignment: PivotAlignment | null) {
-  if (!alignment) return null;
-  return PIVOT_ALIGNMENT_OPTIONS.find((option) => option.value === alignment)?.label ?? alignment;
+function parsePivotAngleDegrees(value: unknown): number | null {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) return null;
+  return normalizeAngleDegrees(parsed);
+}
+
+function formatPivotAngleDegrees(angleDegrees: number | null) {
+  return angleDegrees === null ? null : `${normalizeAngleDegrees(angleDegrees)}°`;
+}
+
+function getCircleCoordinate(
+  center: Coordinate,
+  radiusMeters: number,
+  angleDegrees: number,
+): Coordinate {
+  const latRadians = (center[1] * Math.PI) / 180;
+  const latDegreesPerMeter = 1 / 111320;
+  const lngDegreesPerMeter = 1 / (111320 * Math.max(Math.cos(latRadians), 0.00001));
+  const radians = (normalizeAngleDegrees(angleDegrees) * Math.PI) / 180;
+
+  return [
+    center[0] + Math.sin(radians) * radiusMeters * lngDegreesPerMeter,
+    center[1] + Math.cos(radians) * radiusMeters * latDegreesPerMeter,
+  ];
+}
+
+function getPivotAngleDegrees(center: Coordinate, target: Coordinate) {
+  const deltaLng = target[0] - center[0];
+  const deltaLat = target[1] - center[1];
+  const radians = Math.atan2(deltaLng, deltaLat);
+  return normalizeAngleDegrees((radians * 180) / Math.PI);
+}
+
+function deriveCircleFromPolygon(
+  polygon: PolygonGeometry,
+): { center: Coordinate; radiusMeters: number } | null {
+  const ring = polygon.coordinates[0];
+  if (!ring || ring.length < 4) return null;
+
+  const openRing = ring.slice(0, -1);
+  if (openRing.length < 3) return null;
+
+  const center = openRing.reduce(
+    (current, [lng, lat]) => [current[0] + lng / openRing.length, current[1] + lat / openRing.length],
+    [0, 0] as Coordinate,
+  );
+
+  const centerLngLat = new mapboxgl.LngLat(center[0], center[1]);
+  const radiusMeters =
+    openRing.reduce(
+      (sum, coordinates) => sum + centerLngLat.distanceTo(new mapboxgl.LngLat(coordinates[0], coordinates[1])),
+      0,
+    ) / openRing.length;
+
+  return radiusMeters > 0 ? { center, radiusMeters } : null;
+}
+
+function buildPivotOverlayGeoJson(
+  entries: Array<{
+    id: string;
+    center: Coordinate;
+    radiusMeters: number;
+    pivotAngleDegrees: number;
+  }>,
+): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: entries.flatMap((entry) => {
+      const handle = getCircleCoordinate(entry.center, entry.radiusMeters, entry.pivotAngleDegrees);
+
+      return [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [entry.center, handle],
+          },
+          properties: {
+            id: entry.id,
+            overlayRole: 'arm',
+            pivotAngleDegrees: normalizeAngleDegrees(entry.pivotAngleDegrees),
+          },
+        },
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: handle,
+          },
+          properties: {
+            id: entry.id,
+            overlayRole: 'handle',
+            pivotAngleDegrees: normalizeAngleDegrees(entry.pivotAngleDegrees),
+          },
+        },
+      ];
+    }),
+  };
 }
 
 function getPolygonBounds(polygon: PolygonGeometry) {
@@ -328,11 +414,11 @@ function buildSavedFieldsGeoJson(fields: FieldRecord[]): FeatureCollection {
         id: field.id,
         fieldName: field.fieldName,
         fieldType: formatFieldType(field.fieldType),
-        pivotAlignment: formatPivotAlignment(field.pivotAlignment),
+        pivotAngleDegrees: formatPivotAngleDegrees(field.pivotAngleDegrees),
         mapLabel:
-          field.fieldType === 'pervits' && field.pivotAlignment
-            ? `${field.fieldName} · Pervits · ${formatPivotAlignment(field.pivotAlignment)}`
-            : `${field.fieldName} · Normal`,
+          field.fieldType === 'pivot' && field.pivotAngleDegrees !== null
+            ? `${field.fieldName} - Pivots - ${formatPivotAngleDegrees(field.pivotAngleDegrees)}`
+            : `${field.fieldName} - Normal`,
       },
       geometry: field.boundary,
     })),
@@ -450,6 +536,34 @@ function ensureMapLayers(map: mapboxgl.Map) {
     });
   }
 
+  if (!map.getLayer('saved-pivot-arm')) {
+    map.addLayer({
+      id: 'saved-pivot-arm',
+      type: 'line',
+      source: SAVED_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'arm'],
+      paint: {
+        'line-color': '#14532d',
+        'line-width': 2.5,
+      },
+    });
+  }
+
+  if (!map.getLayer('saved-pivot-handle')) {
+    map.addLayer({
+      id: 'saved-pivot-handle',
+      type: 'circle',
+      source: SAVED_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'handle'],
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#14532d',
+        'circle-stroke-color': '#f7fbf7',
+        'circle-stroke-width': 1.5,
+      },
+    });
+  }
+
   if (!map.getLayer('draft-boundary-fill')) {
     map.addLayer({
       id: 'draft-boundary-fill',
@@ -492,6 +606,34 @@ function ensureMapLayers(map: mapboxgl.Map) {
           '#f59e0b',
         ],
         'circle-stroke-color': '#d97706',
+        'circle-stroke-width': 2,
+      },
+    });
+  }
+
+  if (!map.getLayer('draft-pivot-arm')) {
+    map.addLayer({
+      id: 'draft-pivot-arm',
+      type: 'line',
+      source: DRAFT_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'arm'],
+      paint: {
+        'line-color': '#b45309',
+        'line-width': 3,
+      },
+    });
+  }
+
+  if (!map.getLayer('draft-pivot-handle')) {
+    map.addLayer({
+      id: 'draft-pivot-handle',
+      type: 'circle',
+      source: DRAFT_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'handle'],
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#f59e0b',
+        'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 2,
       },
     });
@@ -552,6 +694,8 @@ function FieldMapPanel({
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const pivotDragActiveRef = useRef(false);
+  const pivotPointerIdRef = useRef<number | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
   );
@@ -562,7 +706,7 @@ function FieldMapPanel({
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [fieldNameDraft, setFieldNameDraft] = useState('');
   const [drawMode, setDrawMode] = useState<DrawMode>('circle');
-  const [pivotAlignmentDraft, setPivotAlignmentDraft] = useState<PivotAlignment>('north');
+  const [pivotAngleDraft, setPivotAngleDraft] = useState(0);
   const [freePoints, setFreePoints] = useState<Coordinate[]>([]);
   const [freePolygonComplete, setFreePolygonComplete] = useState(false);
   const [circleCenter, setCircleCenter] = useState<Coordinate | null>(null);
@@ -570,7 +714,7 @@ function FieldMapPanel({
   const [circleRadiusLocked, setCircleRadiusLocked] = useState(false);
   const [savingField, setSavingField] = useState(false);
   const isAddingField = mode === 'create';
-  const draftFieldType: FieldType = drawMode === 'circle' ? 'pervits' : 'normal';
+  const draftFieldType: FieldType = drawMode === 'circle' ? 'pivot' : 'normal';
 
   const freePolygon = freePolygonComplete ? buildFreePolygon(freePoints) : null;
   const circlePolygon =
@@ -578,17 +722,52 @@ function FieldMapPanel({
       ? createCirclePolygon(circleCenter, circleRadiusMeters)
       : null;
   const draftPolygon = drawMode === 'free' ? freePolygon : circlePolygon;
-  const circleEdge =
-    circleCenter && circleRadiusMeters && circleRadiusMeters > 0
-      ? ([
-          circleCenter[0] + circleRadiusMeters / (111320 * Math.max(Math.cos((circleCenter[1] * Math.PI) / 180), 0.00001)),
-          circleCenter[1],
-        ] as Coordinate)
+  const circlePreviewEdge =
+    circleCenter && circleRadiusMeters && circleRadiusMeters > 0 && !circleRadiusLocked
+      ? getCircleCoordinate(circleCenter, circleRadiusMeters, 0)
+      : null;
+  const savedPivotEntries = fields.flatMap((field) => {
+    if (field.fieldType !== 'pivot' || field.pivotAngleDegrees === null) return [];
+
+    const circle = deriveCircleFromPolygon(field.boundary);
+    if (!circle) return [];
+
+    return [
+      {
+        id: field.id,
+        center: circle.center,
+        radiusMeters: circle.radiusMeters,
+        pivotAngleDegrees: field.pivotAngleDegrees,
+      },
+    ];
+  });
+  const draftPivotEntries =
+    draftFieldType === 'pivot' &&
+    circleCenter &&
+    circleRadiusMeters &&
+    circleRadiusMeters > 5 &&
+    circleRadiusLocked
+      ? [
+          {
+            id: 'draft',
+            center: circleCenter,
+            radiusMeters: circleRadiusMeters,
+            pivotAngleDegrees: pivotAngleDraft,
+          },
+        ]
+      : [];
+  const draftPivotHandle =
+    draftPivotEntries.length > 0
+      ? getCircleCoordinate(
+          draftPivotEntries[0].center,
+          draftPivotEntries[0].radiusMeters,
+          draftPivotEntries[0].pivotAngleDegrees,
+        )
       : null;
 
   function resetDraftState(nextMode: DrawMode = drawMode) {
     setDrawMode(nextMode);
-    setPivotAlignmentDraft('north');
+    setPivotAngleDraft(0);
     setFreePoints([]);
     setFreePolygonComplete(false);
     setCircleCenter(null);
@@ -628,13 +807,18 @@ function FieldMapPanel({
           fieldName: record.field_name,
           boundary,
           fieldType: parseFieldType(record.field_type),
-          pivotAlignment: parsePivotAlignment(record.pivot_alignment),
+          pivotAngleDegrees: parsePivotAngleDegrees(record.pivot_angle_degrees),
         } satisfies FieldRecord;
       })
       .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field));
 
     setFields(parsedFields);
     setFieldsLoading(false);
+  }
+
+  function updatePivotAngleFromLngLat(lngLat: mapboxgl.LngLat) {
+    if (!circleCenter) return;
+    setPivotAngleDraft(getPivotAngleDegrees(circleCenter, [lngLat.lng, lngLat.lat]));
   }
 
   async function handleConfirmBoundary() {
@@ -658,11 +842,6 @@ function FieldMapPanel({
       return;
     }
 
-    if (draftFieldType === 'pervits' && !pivotAlignmentDraft) {
-      setFieldError('Choose the current pivot alignment before confirming the boundary.');
-      return;
-    }
-
     setSavingField(true);
     setFieldError(null);
     setFieldMessage(null);
@@ -672,7 +851,7 @@ function FieldMapPanel({
       input_field_name: fieldNameDraft.trim(),
       input_boundary: draftPolygon,
       input_field_type: draftFieldType,
-      input_pivot_alignment: draftFieldType === 'pervits' ? pivotAlignmentDraft : null,
+      input_pivot_angle_degrees: draftFieldType === 'pivot' ? pivotAngleDraft : null,
     });
 
     setSavingField(false);
@@ -755,14 +934,26 @@ function FieldMapPanel({
     if (!map || status !== 'ready') return;
 
     ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(fields));
+    ensureGeoJsonSource(map, SAVED_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(savedPivotEntries));
     ensureGeoJsonSource(map, DRAFT_BOUNDARY_SOURCE_ID, buildDraftBoundaryGeoJson(draftPolygon));
     ensureGeoJsonSource(
       map,
       DRAFT_POINTS_SOURCE_ID,
-      buildDraftPointsGeoJson(drawMode, freePoints, circleCenter, circleEdge),
+      buildDraftPointsGeoJson(drawMode, freePoints, circleCenter, circlePreviewEdge),
     );
+    ensureGeoJsonSource(map, DRAFT_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(draftPivotEntries));
     ensureMapLayers(map);
-  }, [status, fields, draftPolygon, drawMode, freePoints, circleCenter, circleEdge]);
+  }, [
+    status,
+    fields,
+    savedPivotEntries,
+    draftPolygon,
+    drawMode,
+    freePoints,
+    circleCenter,
+    circlePreviewEdge,
+    draftPivotEntries,
+  ]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -796,6 +987,28 @@ function FieldMapPanel({
     const activeMap = mapInstanceRef.current;
     if (!activeMap || status !== 'ready') return;
     const map = activeMap;
+    const canvas = map.getCanvas();
+    const canvasElement = map.getCanvasContainer();
+
+    function getLngLatFromPointerEvent(event: PointerEvent) {
+      const bounds = canvasElement.getBoundingClientRect();
+      const point = [event.clientX - bounds.left, event.clientY - bounds.top] as [number, number];
+      return map.unproject(point);
+    }
+
+    function updateCursorFromPointerEvent(event: PointerEvent) {
+      if (!draftPivotHandle) {
+        canvas.style.cursor = '';
+        return;
+      }
+
+      const bounds = canvasElement.getBoundingClientRect();
+      const handlePoint = map.project(draftPivotHandle);
+      const pointerX = event.clientX - bounds.left;
+      const pointerY = event.clientY - bounds.top;
+      const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
+      canvas.style.cursor = distance <= 18 ? 'grab' : '';
+    }
 
     function handleMapClick(event: mapboxgl.MapMouseEvent) {
       if (!isAddingField) return;
@@ -837,16 +1050,7 @@ function FieldMapPanel({
         return;
       }
 
-      const radius = new mapboxgl.LngLat(circleCenter[0], circleCenter[1]).distanceTo(
-        event.lngLat,
-      );
-      setCircleRadiusMeters(radius);
-      setCircleRadiusLocked(true);
-      setFieldMessage('Circle ready. Confirm the boundary to save the field.');
-    }
-
-    function handleMouseMove(event: mapboxgl.MapMouseEvent) {
-      if (!isAddingField || drawMode !== 'circle' || !circleCenter || circleRadiusLocked) {
+      if (circleRadiusLocked) {
         return;
       }
 
@@ -854,14 +1058,112 @@ function FieldMapPanel({
         event.lngLat,
       );
       setCircleRadiusMeters(radius);
+      updatePivotAngleFromLngLat(event.lngLat);
+      setCircleRadiusLocked(true);
+      setFieldMessage('Circle ready. Drag the pivot arm around the circle, then confirm the boundary.');
+    }
+
+    function handleMouseMove(event: mapboxgl.MapMouseEvent) {
+      if (!isAddingField || drawMode !== 'circle' || !circleCenter) {
+        return;
+      }
+
+      if (pivotDragActiveRef.current && circleRadiusLocked) {
+        canvas.style.cursor = 'grabbing';
+        updatePivotAngleFromLngLat(event.lngLat);
+        return;
+      }
+
+      if (!circleRadiusLocked) {
+        const radius = new mapboxgl.LngLat(circleCenter[0], circleCenter[1]).distanceTo(
+          event.lngLat,
+        );
+        setCircleRadiusMeters(radius);
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
+    }
+
+    function stopPivotDrag() {
+      if (!pivotDragActiveRef.current) return;
+
+      pivotDragActiveRef.current = false;
+      const activePointerId = pivotPointerIdRef.current;
+      pivotPointerIdRef.current = null;
+      if (!map.dragPan.isEnabled()) {
+        map.dragPan.enable();
+      }
+      if (activePointerId !== null && canvasElement.hasPointerCapture(activePointerId)) {
+        try {
+          canvasElement.releasePointerCapture(activePointerId);
+        } catch {}
+      }
+      canvas.style.cursor = '';
+      setFieldMessage('Pivot position set. Confirm the boundary to save the field.');
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!isAddingField || drawMode !== 'circle' || !circleCenter || !circleRadiusLocked || !draftPivotHandle) {
+        return;
+      }
+
+      const bounds = canvasElement.getBoundingClientRect();
+      const handlePoint = map.project(draftPivotHandle);
+      const pointerX = event.clientX - bounds.left;
+      const pointerY = event.clientY - bounds.top;
+      const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
+
+      if (distance > 18) {
+        return;
+      }
+
+      event.preventDefault();
+      pivotDragActiveRef.current = true;
+      pivotPointerIdRef.current = event.pointerId;
+      canvas.style.cursor = 'grabbing';
+      map.dragPan.disable();
+      canvasElement.setPointerCapture(event.pointerId);
+      const lngLat = getLngLatFromPointerEvent(event);
+      updatePivotAngleFromLngLat(lngLat);
+      setFieldMessage('Dragging pivot arm. Release to keep the current position.');
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!isAddingField || drawMode !== 'circle' || !circleCenter || !circleRadiusLocked) {
+        return;
+      }
+
+      if (pivotDragActiveRef.current) {
+        event.preventDefault();
+        canvas.style.cursor = 'grabbing';
+        const lngLat = getLngLatFromPointerEvent(event);
+        updatePivotAngleFromLngLat(lngLat);
+        return;
+      }
+
+      updateCursorFromPointerEvent(event);
+    }
+
+    function handlePointerUp() {
+      stopPivotDrag();
     }
 
     map.on('click', handleMapClick);
     map.on('mousemove', handleMouseMove);
+    canvasElement.addEventListener('pointerdown', handlePointerDown);
+    canvasElement.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
 
     return () => {
+      stopPivotDrag();
+      canvas.style.cursor = '';
       map.off('click', handleMapClick);
       map.off('mousemove', handleMouseMove);
+      canvasElement.removeEventListener('pointerdown', handlePointerDown);
+      canvasElement.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     };
   }, [
     status,
@@ -871,7 +1173,9 @@ function FieldMapPanel({
     freePoints,
     freePolygonComplete,
     circleCenter,
+    circleRadiusMeters,
     circleRadiusLocked,
+    draftPivotHandle,
   ]);
 
   return (
@@ -915,35 +1219,21 @@ function FieldMapPanel({
             />
             <p className="draw-help">
               {drawMode === 'circle'
-                ? 'Circle mode creates a Pervits field: click once for the center, move to size it, click again to lock the boundary.'
+                ? 'Circle mode creates a Pivots field: click once for the center, move to size it, click again to lock the boundary. Then drag the pivot arm to the current position.'
                 : 'Free mode: click each boundary point, then click the first point to close the field.'}
             </p>
             <div className="field-meta-banner" aria-live="polite">
               <span className="field-type-pill">{formatFieldType(draftFieldType)} field</span>
-              {draftFieldType === 'pervits' ? (
-                <span className="field-meta-copy">Set the pivot arm alignment before saving.</span>
-              ) : (
-                <span className="field-meta-copy">Free mode saves this as a normal field.</span>
-              )}
+              <span className="field-meta-copy">
+                {draftFieldType === 'pivot'
+                  ? 'Drag the pivot arm handle anywhere around the circle before saving.'
+                  : 'Free mode saves this as a normal field.'}
+              </span>
             </div>
-            {draftFieldType === 'pervits' ? (
-              <>
-                <label className="auth-label" htmlFor="pivot-alignment">
-                  Current pivot alignment
-                </label>
-                <select
-                  id="pivot-alignment"
-                  className="auth-input"
-                  value={pivotAlignmentDraft}
-                  onChange={(event) => setPivotAlignmentDraft(event.target.value as PivotAlignment)}
-                >
-                  {PIVOT_ALIGNMENT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </>
+            {draftFieldType === 'pivot' ? (
+              <p className="pivot-angle-readout">
+                Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
+              </p>
             ) : null}
             <div className="field-action-row">
               <button
@@ -995,9 +1285,9 @@ function FieldMapPanel({
                   <span className="field-type-pill">{formatFieldType(field.fieldType)}</span>
                 </div>
                 <p className="field-summary-meta">
-                  {field.fieldType === 'pervits'
-                    ? `Pivot alignment: ${formatPivotAlignment(field.pivotAlignment) ?? 'Not set'}`
-                    : 'No pivot alignment tracked for normal fields.'}
+                  {field.fieldType === 'pivot'
+                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
+                    : 'No pivot position tracked for normal fields.'}
                 </p>
               </article>
             ))}
