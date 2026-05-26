@@ -136,6 +136,7 @@ p {
 .nav-cta {
   display: inline-flex;
   align-items: center;
+  position: relative;
 }
 
 .route-crumb {
@@ -260,6 +261,38 @@ p {
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  min-width: 11rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: #ffffff;
+  box-shadow: 0 16px 36px rgba(16, 24, 20, 0.14);
+}
+
+.account-menu-item {
+  width: 100%;
+  padding: 0.7rem 0.85rem;
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.account-menu-item:hover,
+.account-menu-item:focus-visible {
+  background: var(--bg-muted);
+  outline: none;
 }
 
 .btn {

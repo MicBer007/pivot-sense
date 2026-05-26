@@ -34,5 +34,10 @@ test('farmer can open a workspace with a single name field', async ({ page }) =>
   await page.locator('form').getByRole('button', { name: 'Continue', exact: true }).click();
 
   await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Switch farmer' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open account menu' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Switch farmer' })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Switch farmer' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Open your farmer workspace' }),
+  ).toBeVisible();
 });

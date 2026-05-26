@@ -941,6 +941,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
   const [activeScreen, setActiveScreen] = useState<AppScreen>(() => readAppScreenFromHash());
   const [menuOpen, setMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [appState, setAppState] = useState<AppState>('loading');
   const [farmerNameInput, setFarmerNameInput] = useState('');
   const [currentFarmerName, setCurrentFarmerName] = useState('');
@@ -949,6 +950,7 @@ export default function App() {
   const [farmerError, setFarmerError] = useState<string | null>(null);
   const [fieldFlowMessage, setFieldFlowMessage] = useState<string | null>(null);
   const [savingFarmer, setSavingFarmer] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
 
   useEffect(() => {
@@ -1015,6 +1017,30 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setAccountMenuOpen(false);
+      }
+    }
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [accountMenuOpen]);
+
   async function handleFarmerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1066,6 +1092,7 @@ export default function App() {
   }
 
   function handleSwitchFarmer() {
+    setAccountMenuOpen(false);
     clearStoredFarmer();
     writeAppScreenHash('workspace');
     setFarmerMessage(null);
@@ -1079,12 +1106,14 @@ export default function App() {
   }
 
   function handleOpenAddFieldScreen() {
+    setAccountMenuOpen(false);
     setFieldFlowMessage(null);
     writeAppScreenHash('add-field');
     setActiveScreen('add-field');
   }
 
   function handleCloseAddFieldScreen() {
+    setAccountMenuOpen(false);
     writeAppScreenHash('workspace');
     setActiveScreen('workspace');
   }
@@ -1202,16 +1231,30 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="nav-cta">
+          <div className="nav-cta" ref={accountMenuRef}>
             <button
               type="button"
               className="account-switch-button"
-              aria-label="Switch farmer"
-              title="Switch farmer"
-              onClick={handleSwitchFarmer}
+              aria-label="Open account menu"
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              title="Account"
+              onClick={() => setAccountMenuOpen((value) => !value)}
             >
               <AccountSwitchIcon />
             </button>
+            {accountMenuOpen ? (
+              <div className="account-menu" role="menu" aria-label="Account actions">
+                <button
+                  type="button"
+                  className="account-menu-item"
+                  role="menuitem"
+                  onClick={handleSwitchFarmer}
+                >
+                  Switch farmer
+                </button>
+              </div>
+            ) : null}
           </div>
           <button
             type="button"
