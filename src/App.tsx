@@ -112,6 +112,7 @@ const DRAFT_POINTS_SOURCE_ID = 'draft-points';
 const SAVED_PIVOT_SOURCE_ID = 'saved-pivot';
 const DRAFT_PIVOT_SOURCE_ID = 'draft-pivot';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
+const TOUCH_HIT_RADIUS_PX = 28;
 const TAB_ROOT_PATHS: Record<TabId, string> = {
   overview: '/overview',
   insights: '/insights',
@@ -656,7 +657,7 @@ function ensureMapLayers(map: mapboxgl.Map) {
       type: 'circle',
       source: DRAFT_POINTS_SOURCE_ID,
       paint: {
-        'circle-radius': 6,
+        'circle-radius': 10,
         'circle-color': [
           'match',
           ['get', 'pointRole'],
@@ -692,7 +693,7 @@ function ensureMapLayers(map: mapboxgl.Map) {
       source: DRAFT_PIVOT_SOURCE_ID,
       filter: ['==', ['get', 'overlayRole'], 'handle'],
       paint: {
-        'circle-radius': 7,
+        'circle-radius': 12,
         'circle-color': '#f59e0b',
         'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 2,
@@ -1169,6 +1170,7 @@ function FieldMapPanel({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
         attributionControl: true,
+        clickTolerance: 10,
       });
 
       mapInstanceRef.current = map;
@@ -1279,7 +1281,7 @@ function FieldMapPanel({
       const pointerX = event.clientX - bounds.left;
       const pointerY = event.clientY - bounds.top;
       const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
-      canvas.style.cursor = distance <= 18 ? 'grab' : '';
+      canvas.style.cursor = distance <= TOUCH_HIT_RADIUS_PX ? 'grab' : '';
     }
 
     function handleMapClick(event: mapboxgl.MapMouseEvent) {
@@ -1309,7 +1311,7 @@ function FieldMapPanel({
         if (freePoints.length >= 3) {
           const firstPoint = map.project(freePoints[0]);
           const clickDistance = Math.hypot(firstPoint.x - event.point.x, firstPoint.y - event.point.y);
-          if (clickDistance <= 18) {
+          if (clickDistance <= TOUCH_HIT_RADIUS_PX) {
             setFreePolygonComplete(true);
             setFieldMessage('Boundary closed. Confirm the boundary to save the field.');
             return;
@@ -1418,7 +1420,7 @@ function FieldMapPanel({
       const pointerY = event.clientY - bounds.top;
       const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
 
-      if (distance > 18) {
+      if (distance > TOUCH_HIT_RADIUS_PX) {
         return;
       }
 
