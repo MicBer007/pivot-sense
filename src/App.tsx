@@ -104,6 +104,11 @@ const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
 const SAVED_PIVOT_SOURCE_ID = 'saved-pivot';
 const DRAFT_PIVOT_SOURCE_ID = 'draft-pivot';
+const ACTION_FIELDS_SOURCE_ID = 'action-fields';
+const ACTION_SELECTED_FIELD_SOURCE_ID = 'action-selected-field';
+const ACTION_SWEEP_SOURCE_ID = 'action-sweep';
+const ACTION_START_PIVOT_SOURCE_ID = 'action-start-pivot';
+const ACTION_END_PIVOT_SOURCE_ID = 'action-end-pivot';
 const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
 const TOUCH_HIT_RADIUS_PX = 28;
 const TAB_ROOT_PATHS: Record<TabId, string> = {
@@ -339,6 +344,12 @@ function formatPivotAngleDegrees(angleDegrees: number | null) {
   return angleDegrees === null ? null : `${normalizeAngleDegrees(angleDegrees)} deg`;
 }
 
+function isSilentMapboxResourceError(event: mapboxgl.ErrorEvent) {
+  const error = event.error as Error & { status?: number; statusCode?: number };
+  const statusCode = error.status ?? error.statusCode;
+  return statusCode === 403 || error.message.includes('403');
+}
+
 function getCircleCoordinate(
   center: Coordinate,
   radiusMeters: number,
@@ -483,6 +494,20 @@ function buildSavedFieldsGeoJson(fields: FieldRecord[]): FeatureCollection {
   };
 }
 
+function buildFieldSelectionGeoJson(fields: FieldRecord[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: fields.map((field) => ({
+      type: 'Feature',
+      properties: {
+        id: field.id,
+        fieldName: field.fieldName,
+      },
+      geometry: field.boundary,
+    })),
+  };
+}
+
 function buildDraftBoundaryGeoJson(polygon: PolygonGeometry | null): FeatureCollection {
   return {
     type: 'FeatureCollection',
@@ -537,17 +562,64 @@ function buildDraftPointsGeoJson(
   };
 }
 
-function ensureGeoJsonSource(map: mapboxgl.Map, id: string, data: FeatureCollection) {
-  const existingSource = map.getSource(id) as mapboxgl.GeoJSONSource | undefined;
-  if (existingSource) {
-    existingSource.setData(data as never);
-    return;
+function buildPivotSweepGeoJson(
+  center: Coordinate | null,
+  radiusMeters: number | null,
+  startAngle: number,
+  movementDegrees: number,
+): FeatureCollection {
+  if (!center || !radiusMeters || radiusMeters <= 0 || movementDegrees <= 0) {
+    return {
+      type: 'FeatureCollection',
+      features: [],
+    };
   }
+
+  const normalizedMovement = Math.min(360, Math.max(0, movementDegrees));
+  const steps = Math.max(8, Math.ceil(normalizedMovement / 6));
+  const ring: Coordinate[] = [center];
+
+  for (let index = 0; index <= steps; index += 1) {
+    const angle = startAngle + (normalizedMovement * index) / steps;
+    ring.push(getCircleCoordinate(center, radiusMeters, angle));
+  }
+
+  ring.push(center);
+
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [ring],
+        },
+        properties: {},
+      },
+    ],
+  };
+}
+
+function ensureGeoJsonSource(map: mapboxgl.Map, id: string, data: FeatureCollection) {
+  if (map.getSource(id)) return;
 
   map.addSource(id, {
     type: 'geojson',
     data: data as never,
   });
+}
+
+function setGeoJsonSourceData(map: mapboxgl.Map, id: string, data: FeatureCollection) {
+  const existingSource = map.getSource(id) as mapboxgl.GeoJSONSource | undefined;
+  existingSource?.setData(data as never);
+}
+
+function emptyFeatureCollection(): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: [],
+  };
 }
 
 function ensureMapLayers(map: mapboxgl.Map) {
@@ -696,6 +768,143 @@ function ensureMapLayers(map: mapboxgl.Map) {
       },
     });
   }
+}
+
+function ensureFieldMapSourcesAndLayers(map: mapboxgl.Map) {
+  ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, SAVED_PIVOT_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, DRAFT_BOUNDARY_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, DRAFT_POINTS_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, DRAFT_PIVOT_SOURCE_ID, emptyFeatureCollection());
+  ensureMapLayers(map);
+}
+
+function ensureActionMapLayers(map: mapboxgl.Map) {
+  if (!map.getLayer('action-fields-fill')) {
+    map.addLayer({
+      id: 'action-fields-fill',
+      type: 'fill',
+      source: ACTION_FIELDS_SOURCE_ID,
+      paint: {
+        'fill-color': '#2f7d3b',
+        'fill-opacity': 0.08,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-fields-line')) {
+    map.addLayer({
+      id: 'action-fields-line',
+      type: 'line',
+      source: ACTION_FIELDS_SOURCE_ID,
+      paint: {
+        'line-color': '#1f5d2b',
+        'line-width': 2,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-selected-field-fill')) {
+    map.addLayer({
+      id: 'action-selected-field-fill',
+      type: 'fill',
+      source: ACTION_SELECTED_FIELD_SOURCE_ID,
+      paint: {
+        'fill-color': '#f59e0b',
+        'fill-opacity': 0.1,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-selected-field-line')) {
+    map.addLayer({
+      id: 'action-selected-field-line',
+      type: 'line',
+      source: ACTION_SELECTED_FIELD_SOURCE_ID,
+      paint: {
+        'line-color': '#f59e0b',
+        'line-width': 3,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-sweep-fill')) {
+    map.addLayer({
+      id: 'action-sweep-fill',
+      type: 'fill',
+      source: ACTION_SWEEP_SOURCE_ID,
+      paint: {
+        'fill-color': '#2563eb',
+        'fill-opacity': 0.28,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-start-pivot-arm')) {
+    map.addLayer({
+      id: 'action-start-pivot-arm',
+      type: 'line',
+      source: ACTION_START_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'arm'],
+      paint: {
+        'line-color': '#64748b',
+        'line-width': 2.5,
+        'line-dasharray': [1.5, 1.5],
+      },
+    });
+  }
+
+  if (!map.getLayer('action-start-pivot-handle')) {
+    map.addLayer({
+      id: 'action-start-pivot-handle',
+      type: 'circle',
+      source: ACTION_START_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'handle'],
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#64748b',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 1.5,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-end-pivot-arm')) {
+    map.addLayer({
+      id: 'action-end-pivot-arm',
+      type: 'line',
+      source: ACTION_END_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'arm'],
+      paint: {
+        'line-color': '#14532d',
+        'line-width': 3,
+      },
+    });
+  }
+
+  if (!map.getLayer('action-end-pivot-handle')) {
+    map.addLayer({
+      id: 'action-end-pivot-handle',
+      type: 'circle',
+      source: ACTION_END_PIVOT_SOURCE_ID,
+      filter: ['==', ['get', 'overlayRole'], 'handle'],
+      paint: {
+        'circle-radius': 12,
+        'circle-color': '#f59e0b',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+      },
+    });
+  }
+}
+
+function ensureActionMapSourcesAndLayers(map: mapboxgl.Map) {
+  ensureGeoJsonSource(map, ACTION_FIELDS_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, ACTION_SELECTED_FIELD_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, ACTION_SWEEP_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, ACTION_START_PIVOT_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, ACTION_END_PIVOT_SOURCE_ID, emptyFeatureCollection());
+  ensureActionMapLayers(map);
 }
 
 function buildFreePolygon(points: Coordinate[]) {
@@ -1226,12 +1435,14 @@ function FieldMapPanel({
 
       map.on('load', () => {
         if (cancelled) return;
+        ensureFieldMapSourcesAndLayers(map);
         setStatus('ready');
         setErrorMessage(null);
       });
 
       map.on('error', (event) => {
         if (cancelled) return;
+        if (isSilentMapboxResourceError(event)) return;
         setStatus('error');
         setErrorMessage(event.error?.message ?? 'Mapbox failed to load.');
       });
@@ -1253,16 +1464,15 @@ function FieldMapPanel({
     const map = mapInstanceRef.current;
     if (!map || status !== 'ready') return;
 
-    ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(visibleFields));
-    ensureGeoJsonSource(map, SAVED_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(savedPivotEntries));
-    ensureGeoJsonSource(map, DRAFT_BOUNDARY_SOURCE_ID, buildDraftBoundaryGeoJson(draftPolygon));
-    ensureGeoJsonSource(
+    setGeoJsonSourceData(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(visibleFields));
+    setGeoJsonSourceData(map, SAVED_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(savedPivotEntries));
+    setGeoJsonSourceData(map, DRAFT_BOUNDARY_SOURCE_ID, buildDraftBoundaryGeoJson(draftPolygon));
+    setGeoJsonSourceData(
       map,
       DRAFT_POINTS_SOURCE_ID,
       buildDraftPointsGeoJson(drawMode, freePoints, circleCenter, circlePreviewEdge),
     );
-    ensureGeoJsonSource(map, DRAFT_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(draftPivotEntries));
-    ensureMapLayers(map);
+    setGeoJsonSourceData(map, DRAFT_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(draftPivotEntries));
   }, [
     status,
     visibleFields,
@@ -1712,128 +1922,22 @@ function computeClockwiseMovement(startAngle: number, endAngle: number) {
   return (end - start + 360) % 360;
 }
 
-const PIVOT_DIAL_SIZE = 220;
-const PIVOT_DIAL_RADIUS = 92;
-
-function PivotDial({
-  startAngle,
-  endAngle,
-  onChange,
-}: {
-  startAngle: number;
-  endAngle: number;
-  onChange: (nextAngle: number) => void;
-}) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const draggingRef = useRef(false);
-
-  const center = PIVOT_DIAL_SIZE / 2;
-  const start = normalizeAngleDegrees(startAngle);
-  const end = normalizeAngleDegrees(endAngle);
-
-  function angleToPoint(angle: number) {
-    const radians = (normalizeAngleDegrees(angle) * Math.PI) / 180;
-    return {
-      x: center + Math.sin(radians) * PIVOT_DIAL_RADIUS,
-      y: center - Math.cos(radians) * PIVOT_DIAL_RADIUS,
-    };
-  }
-
-  function pointerToAngle(event: PointerEvent | React.PointerEvent) {
-    const svg = svgRef.current;
-    if (!svg) return end;
-    const rect = svg.getBoundingClientRect();
-    const x = event.clientX - rect.left - center;
-    const y = event.clientY - rect.top - center;
-    const radians = Math.atan2(x, -y);
-    return normalizeAngleDegrees((radians * 180) / Math.PI);
-  }
-
-  function handlePointerDown(event: React.PointerEvent<SVGSVGElement>) {
-    event.preventDefault();
-    draggingRef.current = true;
-    (event.target as Element).setPointerCapture?.(event.pointerId);
-    onChange(pointerToAngle(event));
-  }
-
-  function handlePointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    if (!draggingRef.current) return;
-    event.preventDefault();
-    onChange(pointerToAngle(event));
-  }
-
-  function handlePointerUp(event: React.PointerEvent<SVGSVGElement>) {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    try {
-      (event.target as Element).releasePointerCapture?.(event.pointerId);
-    } catch {}
-  }
-
-  const startPoint = angleToPoint(start);
-  const endPoint = angleToPoint(end);
-
-  return (
-    <svg
-      ref={svgRef}
-      className="pivot-dial"
-      width={PIVOT_DIAL_SIZE}
-      height={PIVOT_DIAL_SIZE}
-      viewBox={`0 0 ${PIVOT_DIAL_SIZE} ${PIVOT_DIAL_SIZE}`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      role="slider"
-      aria-label="New pivot angle"
-      aria-valuemin={0}
-      aria-valuemax={359}
-      aria-valuenow={end}
-    >
-      <circle
-        cx={center}
-        cy={center}
-        r={PIVOT_DIAL_RADIUS}
-        fill="rgba(47, 125, 59, 0.08)"
-        stroke="#cfd9d2"
-        strokeWidth={1.5}
-      />
-      <line
-        x1={center}
-        y1={center}
-        x2={startPoint.x}
-        y2={startPoint.y}
-        stroke="#8aa394"
-        strokeWidth={2}
-        strokeDasharray="4 4"
-      />
-      <circle cx={startPoint.x} cy={startPoint.y} r={5} fill="#8aa394" />
-      <line
-        x1={center}
-        y1={center}
-        x2={endPoint.x}
-        y2={endPoint.y}
-        stroke="#14532d"
-        strokeWidth={3}
-      />
-      <circle
-        cx={endPoint.x}
-        cy={endPoint.y}
-        r={10}
-        fill="#f59e0b"
-        stroke="#ffffff"
-        strokeWidth={2}
-      />
-      <circle cx={center} cy={center} r={4} fill="#14532d" />
-    </svg>
-  );
-}
-
 function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [fields, setFields] = useState<FieldRecord[]>([]);
   const [loadingFields, setLoadingFields] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const mapId = useId();
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const pivotDragActiveRef = useRef(false);
+  const pivotPointerIdRef = useRef<number | null>(null);
+  const selectedCircleRef = useRef<{ center: Coordinate; radiusMeters: number } | null>(null);
+  const endPivotHandleRef = useRef<Coordinate | null>(null);
   const [selectedFieldId, setSelectedFieldId] = useState('');
+  const [mapStatus, setMapStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
+  );
+  const [, setMapErrorMessage] = useState<string | null>(null);
   const [endDate, setEndDate] = useState<string>(() => todayDateString());
   const [newAngle, setNewAngle] = useState<number>(0);
   const [movementOverride, setMovementOverride] = useState<string>('');
@@ -1853,17 +1957,54 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const mmAppliedNumber = Number(mmAppliedRaw);
   const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
   const effectiveMm = mmAppliedValid ? mmAppliedNumber * movementPct : 0;
+  const selectedCircle =
+    selectedField?.fieldType === 'pivot' ? deriveCircleFromPolygon(selectedField.boundary) : null;
+  const endPivotHandle =
+    selectedCircle && selectedField
+      ? getCircleCoordinate(selectedCircle.center, selectedCircle.radiusMeters, newAngle)
+      : null;
+  const selectedPivotEntry =
+    selectedCircle && selectedField
+      ? [
+          {
+            id: selectedField.id,
+            center: selectedCircle.center,
+            radiusMeters: selectedCircle.radiusMeters,
+            pivotAngleDegrees: startAngle,
+          },
+        ]
+      : [];
+  const endPivotEntry =
+    selectedCircle && selectedField
+      ? [
+          {
+            id: selectedField.id,
+            center: selectedCircle.center,
+            radiusMeters: selectedCircle.radiusMeters,
+            pivotAngleDegrees: newAngle,
+          },
+        ]
+      : [];
 
-  async function loadPivotFields() {
+  useEffect(() => {
+    selectedCircleRef.current = selectedCircle;
+    endPivotHandleRef.current = endPivotHandle;
+  }, [selectedCircle, endPivotHandle]);
+
+  async function loadPivotFields(showLoading = true) {
     if (!currentFarmerId) return;
-    setLoadingFields(true);
+    if (showLoading) {
+      setLoadingFields(true);
+    }
     setLoadError(null);
     const result = await fetchFieldsForFarmer(currentFarmerId);
     setFields(result.data);
     if (result.error) {
       setLoadError(result.error);
     }
-    setLoadingFields(false);
+    if (showLoading) {
+      setLoadingFields(false);
+    }
   }
 
   useEffect(() => {
@@ -1876,6 +2017,258 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       setMovementOverride('');
     }
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
+
+  useEffect(() => {
+    if (loadingFields || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
+      return;
+    }
+
+    mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
+
+    let cancelled = false;
+    setMapStatus('loading');
+
+    try {
+      const map = new mapboxgl.Map({
+        container: mapRef.current,
+        style: MAPBOX_STYLE_URL,
+        center: DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+        attributionControl: true,
+        clickTolerance: 10,
+      });
+
+      mapInstanceRef.current = map;
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+      function markMapReady() {
+        if (cancelled) return;
+        ensureActionMapSourcesAndLayers(map);
+        setMapStatus('ready');
+        setMapErrorMessage(null);
+      }
+
+      map.on('load', markMapReady);
+      map.on('style.load', markMapReady);
+
+      map.on('error', (event) => {
+        if (cancelled) return;
+        if (isSilentMapboxResourceError(event)) return;
+        setMapStatus('error');
+        setMapErrorMessage(event.error?.message ?? 'Mapbox failed to load.');
+      });
+    } catch (error) {
+      setMapStatus('error');
+      setMapErrorMessage(
+        error instanceof Error ? error.message : 'Mapbox failed to initialise.',
+      );
+    }
+
+    return () => {
+      cancelled = true;
+      mapInstanceRef.current?.remove();
+      mapInstanceRef.current = null;
+    };
+  }, [loadingFields]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || mapStatus !== 'ready') return;
+
+    setGeoJsonSourceData(map, ACTION_FIELDS_SOURCE_ID, buildFieldSelectionGeoJson(pivotFields));
+    setGeoJsonSourceData(
+      map,
+      ACTION_SELECTED_FIELD_SOURCE_ID,
+      buildFieldSelectionGeoJson(selectedField ? [selectedField] : []),
+    );
+    setGeoJsonSourceData(
+      map,
+      ACTION_SWEEP_SOURCE_ID,
+      buildPivotSweepGeoJson(
+        selectedCircle?.center ?? null,
+        selectedCircle?.radiusMeters ?? null,
+        startAngle,
+        movementDegrees,
+      ),
+    );
+    setGeoJsonSourceData(map, ACTION_START_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(selectedPivotEntry));
+    setGeoJsonSourceData(map, ACTION_END_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(endPivotEntry));
+  }, [
+    mapStatus,
+    pivotFields,
+    selectedField,
+    selectedCircle,
+    selectedPivotEntry,
+    endPivotEntry,
+    startAngle,
+    movementDegrees,
+  ]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || mapStatus !== 'ready') return;
+
+    const polygons = selectedField ? [selectedField.boundary] : pivotFields.map((field) => field.boundary);
+    if (polygons.length === 0) {
+      map.easeTo({
+        center: DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+        duration: 900,
+      });
+      return;
+    }
+
+    const bounds = polygons.reduce((currentBounds, polygon) => {
+      const nextBounds = getPolygonBounds(polygon);
+      nextBounds.toArray().forEach((point) => currentBounds.extend(point));
+      return currentBounds;
+    }, new mapboxgl.LngLatBounds());
+
+    if (!bounds.isEmpty()) {
+      map.fitBounds(bounds, {
+        padding: 72,
+        maxZoom: 15,
+        duration: 900,
+      });
+    }
+  }, [mapStatus, pivotFields, selectedField]);
+
+  useEffect(() => {
+    const activeMap = mapInstanceRef.current;
+    if (!activeMap || mapStatus !== 'ready') return;
+    const map = activeMap;
+    const canvas = map.getCanvas();
+    const canvasElement = map.getCanvasContainer();
+
+    function getLngLatFromPointerEvent(event: PointerEvent) {
+      const bounds = canvasElement.getBoundingClientRect();
+      const point = [event.clientX - bounds.left, event.clientY - bounds.top] as [number, number];
+      return map.unproject(point);
+    }
+
+    function updatePivotHandleFromLngLat(lngLat: mapboxgl.LngLat) {
+      const circle = selectedCircleRef.current;
+      if (!circle) return;
+      setNewAngle(getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]));
+      setMovementOverride('');
+    }
+
+    function updateCursorFromPointerEvent(event: PointerEvent) {
+      const endPivotHandle = endPivotHandleRef.current;
+      if (!endPivotHandle) {
+        canvas.style.cursor = '';
+        return;
+      }
+
+      const bounds = canvasElement.getBoundingClientRect();
+      const handlePoint = map.project(endPivotHandle);
+      const pointerX = event.clientX - bounds.left;
+      const pointerY = event.clientY - bounds.top;
+      const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
+      canvas.style.cursor = distance <= TOUCH_HIT_RADIUS_PX ? 'grab' : '';
+    }
+
+    function stopPivotDrag() {
+      if (!pivotDragActiveRef.current) return;
+
+      pivotDragActiveRef.current = false;
+      const activePointerId = pivotPointerIdRef.current;
+      pivotPointerIdRef.current = null;
+      if (!map.dragPan.isEnabled()) {
+        map.dragPan.enable();
+      }
+      if (activePointerId !== null && canvasElement.hasPointerCapture(activePointerId)) {
+        try {
+          canvasElement.releasePointerCapture(activePointerId);
+        } catch {}
+      }
+      canvas.style.cursor = '';
+    }
+
+    function handleMapClick(event: mapboxgl.MapMouseEvent) {
+      if (pivotDragActiveRef.current) return;
+      const features = map.queryRenderedFeatures(event.point, {
+        layers: ['action-fields-fill', 'action-fields-line'],
+      });
+      const clickedFieldId = features[0]?.properties?.id;
+      if (typeof clickedFieldId === 'string') {
+        setSelectedFieldId(clickedFieldId);
+        setSaveError(null);
+        setSaveMessage(null);
+      }
+    }
+
+    function handleMouseMove(event: mapboxgl.MapMouseEvent) {
+      if (pivotDragActiveRef.current) {
+        canvas.style.cursor = 'grabbing';
+        updatePivotHandleFromLngLat(event.lngLat);
+        return;
+      }
+
+      const features = map.queryRenderedFeatures(event.point, {
+        layers: ['action-fields-fill', 'action-fields-line'],
+      });
+      canvas.style.cursor = features.length > 0 ? 'pointer' : canvas.style.cursor;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const endPivotHandle = endPivotHandleRef.current;
+      if (!selectedCircleRef.current || !endPivotHandle) {
+        return;
+      }
+
+      const bounds = canvasElement.getBoundingClientRect();
+      const handlePoint = map.project(endPivotHandle);
+      const pointerX = event.clientX - bounds.left;
+      const pointerY = event.clientY - bounds.top;
+      const distance = Math.hypot(handlePoint.x - pointerX, handlePoint.y - pointerY);
+
+      if (distance > TOUCH_HIT_RADIUS_PX) {
+        return;
+      }
+
+      event.preventDefault();
+      pivotDragActiveRef.current = true;
+      pivotPointerIdRef.current = event.pointerId;
+      canvas.style.cursor = 'grabbing';
+      map.dragPan.disable();
+      canvasElement.setPointerCapture(event.pointerId);
+      updatePivotHandleFromLngLat(getLngLatFromPointerEvent(event));
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (pivotDragActiveRef.current) {
+        event.preventDefault();
+        canvas.style.cursor = 'grabbing';
+        updatePivotHandleFromLngLat(getLngLatFromPointerEvent(event));
+        return;
+      }
+
+      updateCursorFromPointerEvent(event);
+    }
+
+    function handlePointerUp() {
+      stopPivotDrag();
+    }
+
+    map.on('click', handleMapClick);
+    map.on('mousemove', handleMouseMove);
+    canvasElement.addEventListener('pointerdown', handlePointerDown);
+    canvasElement.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+
+    return () => {
+      stopPivotDrag();
+      canvas.style.cursor = '';
+      map.off('click', handleMapClick);
+      map.off('mousemove', handleMouseMove);
+      canvasElement.removeEventListener('pointerdown', handlePointerDown);
+      canvasElement.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [mapStatus]);
 
   async function handleSave() {
     if (!supabase) {
@@ -1924,7 +2317,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     );
     setMmAppliedRaw('');
     setMovementOverride('');
-    await loadPivotFields();
+    await loadPivotFields(false);
   }
 
   if (!loadingFields && pivotFields.length === 0) {
@@ -1967,22 +2360,26 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
       {!loadingFields ? (
         <div className="actions-form">
-          <label className="auth-label" htmlFor="actions-field">
-            Pivot field
-          </label>
-          <select
-            id="actions-field"
-            className="auth-input"
-            value={selectedFieldId}
-            onChange={(event) => setSelectedFieldId(event.target.value)}
-          >
-            <option value="">Select a pivot...</option>
-            {pivotFields.map((field) => (
-              <option key={field.id} value={field.id}>
-                {field.fieldName} ({formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'no angle'})
-              </option>
-            ))}
-          </select>
+          {!MAPBOX_ACCESS_TOKEN ? (
+            <div className="map-state-card" data-testid="maps-setup-needed">
+              <h3>Mapbox setup needed</h3>
+              <p>
+                Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
+                before logging pivot actions on the map.
+              </p>
+            </div>
+          ) : (
+            <div className="actions-map-shell">
+              <div className="map-stage">
+                <div
+                  id={mapId}
+                  ref={mapRef}
+                  className="map-canvas actions-map-canvas"
+                  data-testid="actions-map-canvas"
+                />
+              </div>
+            </div>
+          )}
 
           <label className="auth-label" htmlFor="actions-end-date">
             Action date
@@ -1997,24 +2394,20 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
           {selectedField ? (
             <>
-              <div className="pivot-dial-wrap">
-                <PivotDial
-                  startAngle={startAngle}
-                  endAngle={newAngle}
-                  onChange={setNewAngle}
-                />
-                <dl className="pivot-dial-readout">
+              <div className="pivot-map-readout">
+                <strong>{selectedField.fieldName}</strong>
+                <dl className="pivot-angle-grid">
                   <div>
                     <dt>Start</dt>
-                    <dd>{normalizeAngleDegrees(startAngle)}°</dd>
+                    <dd>{normalizeAngleDegrees(startAngle)} deg</dd>
                   </div>
                   <div>
                     <dt>End</dt>
-                    <dd>{normalizeAngleDegrees(newAngle)}°</dd>
+                    <dd>{normalizeAngleDegrees(newAngle)} deg</dd>
                   </div>
                   <div>
                     <dt>Movement</dt>
-                    <dd>{movementDegrees}° ({(movementPct * 100).toFixed(1)}%)</dd>
+                    <dd>{movementDegrees} deg ({(movementPct * 100).toFixed(1)}%)</dd>
                   </div>
                 </dl>
               </div>
@@ -2028,7 +2421,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                     setNewAngle(normalizeAngleDegrees(startAngle));
                   }}
                 >
-                  Full sweep (360°)
+                  Full sweep (360 deg)
                 </button>
                 <button
                   type="button"
@@ -2043,7 +2436,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
               </div>
 
               <label className="auth-label" htmlFor="actions-movement-override">
-                Movement (degrees) — override
+                Movement (degrees) - override
               </label>
               <input
                 id="actions-movement-override"

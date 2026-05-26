@@ -38,9 +38,9 @@ async function seedPivotFarmer() {
       coordinates: [
         [
           [24.67, -28.47],
-          [24.671, -28.47],
-          [24.671, -28.471],
-          [24.67, -28.471],
+          [24.69, -28.47],
+          [24.69, -28.49],
+          [24.67, -28.49],
           [24.67, -28.47],
         ],
       ],
@@ -53,7 +53,7 @@ async function seedPivotFarmer() {
   return { farmerName };
 }
 
-test('actions tab renders pivot dial and effective mm', async ({ page }) => {
+test('actions tab renders pivot map and effective mm', async ({ page }) => {
   const seeded = await seedPivotFarmer();
 
   await page.goto('/');
@@ -68,9 +68,19 @@ test('actions tab renders pivot dial and effective mm', async ({ page }) => {
   await expect(page).toHaveURL(/\/actions$/);
   await expect(page.getByRole('heading', { name: 'Log a pivot action' })).toBeVisible();
 
-  await page.getByLabel('Pivot field').selectOption({ index: 1 });
+  const mapCanvas = page.getByTestId('actions-map-canvas');
+  await expect(mapCanvas).toBeVisible();
+  await page.waitForTimeout(1_200);
+  const mapBox = await mapCanvas.boundingBox();
+  if (!mapBox) throw new Error('Actions map canvas is not visible.');
+  await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
+  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
+  await page.waitForTimeout(1_200);
+  await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
+  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
+
   await page.getByLabel('Millimetres at pivot').fill('20');
-  await page.getByLabel('Movement (degrees) — override').fill('180');
+  await page.getByLabel('Movement (degrees) - override').fill('180');
 
   await expect(page.getByText('10.00 mm', { exact: true })).toBeVisible();
 
