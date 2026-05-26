@@ -1180,14 +1180,14 @@ function FieldMapPanel({
 
   return (
     <section className="map-panel">
-      <div className="field-panel-copy">
-        {!isAddingField ? <h2 className="field-panel-title">Field boundaries</h2> : null}
-        {!isAddingField ? (
+      {!isAddingField ? (
+        <div className="field-panel-copy">
+          <h2 className="field-panel-title">Field boundaries</h2>
           <button type="button" className="btn btn-primary" onClick={onAddField}>
             Add field
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {!MAPBOX_ACCESS_TOKEN ? (
         <div className="map-state-card" data-testid="maps-setup-needed">
@@ -1200,58 +1200,6 @@ function FieldMapPanel({
             Optional: <code>VITE_MAPBOX_STYLE_URL</code> to override the default
             satellite-streets style.
           </p>
-        </div>
-      ) : null}
-
-      {isAddingField ? (
-        <div className="field-creation-card">
-          <div className="field-creation-grid">
-            <label className="auth-label" htmlFor="field-name">
-              Field name
-            </label>
-            <input
-              id="field-name"
-              className="auth-input"
-              type="text"
-              placeholder="North pivot"
-              value={fieldNameDraft}
-              onChange={(event) => setFieldNameDraft(event.target.value)}
-            />
-            <p className="draw-help">
-              {drawMode === 'circle'
-                ? 'Circle mode creates a Pivots field: click once for the center, move to size it, click again to lock the boundary. Then drag the pivot arm to the current position.'
-                : 'Free mode: click each boundary point, then click the first point to close the field.'}
-            </p>
-            <div className="field-meta-banner" aria-live="polite">
-              <span className="field-type-pill">{formatFieldType(draftFieldType)} field</span>
-              <span className="field-meta-copy">
-                {draftFieldType === 'pivot'
-                  ? 'Drag the pivot arm handle anywhere around the circle before saving.'
-                  : 'Free mode saves this as a normal field.'}
-              </span>
-            </div>
-            {draftFieldType === 'pivot' ? (
-              <p className="pivot-angle-readout">
-                Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
-              </p>
-            ) : null}
-            <div className="field-action-row">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void handleConfirmBoundary()}
-                disabled={savingField || !draftPolygon || !fieldNameDraft.trim()}
-              >
-                {savingField ? 'Saving field...' : 'Confirm boundary'}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={onCancelAddField}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={() => resetDraftState(drawMode)}>
-                Reset draft
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
 
@@ -1269,46 +1217,8 @@ function FieldMapPanel({
         </div>
       ) : null}
 
-      {!fieldsLoading && fields.length > 0 ? (
-        <div className="map-state-card">
-          <h3>{fields.length === 1 ? '1 field saved' : `${fields.length} fields saved`}</h3>
-          <p>
-            {fields.length === 1
-              ? `The map zooms to ${fields[0].fieldName}.`
-              : 'The map zooms to include every saved field.'}
-          </p>
-          <div className="field-summary-list">
-            {fields.map((field) => (
-              <article key={field.id} className="field-summary-card">
-                <div className="field-summary-header">
-                  <strong>{field.fieldName}</strong>
-                  <span className="field-type-pill">{formatFieldType(field.fieldType)}</span>
-                </div>
-                <p className="field-summary-meta">
-                  {field.fieldType === 'pivot'
-                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
-                    : 'No pivot position tracked for normal fields.'}
-                </p>
-              </article>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
       {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
-          <div className="map-status-row">
-            <span className={`status-pill status-${status}`}>
-              {status === 'loading' && 'Loading map'}
-              {status === 'ready' && 'Map ready'}
-              {status === 'error' && 'Map error'}
-            </span>
-            <span className="map-meta" aria-live="polite">
-              {status === 'loading' && 'Connecting to Mapbox...'}
-              {status === 'ready' && 'Mapbox is active.'}
-              {status === 'error' && errorMessage}
-            </span>
-          </div>
           <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
             <div
               id={mapId}
@@ -1348,6 +1258,43 @@ function FieldMapPanel({
                 </button>
               </div>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {isAddingField ? (
+        <div className="field-creation-card">
+          <div className="field-creation-grid">
+            <label className="auth-label" htmlFor="field-name">
+              Field name
+            </label>
+            <input
+              id="field-name"
+              className="auth-input"
+              type="text"
+              placeholder="North pivot"
+              value={fieldNameDraft}
+              onChange={(event) => setFieldNameDraft(event.target.value)}
+            />
+            <div className="field-meta-banner" aria-live="polite">
+              <span className="field-type-pill">{formatFieldType(draftFieldType)} field</span>
+            </div>
+            <div className="field-action-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void handleConfirmBoundary()}
+                disabled={savingField || !draftPolygon || !fieldNameDraft.trim()}
+              >
+                {savingField ? 'Saving field...' : 'Confirm boundary'}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={onCancelAddField}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => resetDraftState(drawMode)}>
+                Reset draft
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1788,13 +1735,7 @@ export default function App() {
           ) : (
             <section className="content-card route-card" aria-labelledby="field-route-title">
               <header className="content-header route-header">
-                <div>
-                  <p className="eyebrow">Field setup</p>
-                  <h2 id="field-route-title">Add field</h2>
-                  <p className="route-copy">
-                    Draw and save a field for {currentFarmerName || 'this farmer'} on a separate screen.
-                  </p>
-                </div>
+                <h2 id="field-route-title">Add field</h2>
                 <button type="button" className="btn btn-secondary" onClick={handleCloseAddFieldScreen}>
                   Back to fields
                 </button>
