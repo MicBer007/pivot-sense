@@ -1525,23 +1525,23 @@ function FieldMapPanel({
 
       {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
-          <div className="map-status-row">
-            <span className={`status-pill status-${status}`}>
-              {status === 'loading' && 'Loading map'}
-              {status === 'ready' && 'Map ready'}
-              {status === 'error' && 'Map error'}
-            </span>
-            <span className="map-meta" aria-live="polite">
-              {status === 'loading' && 'Connecting to Mapbox...'}
-              {status === 'ready' &&
-                (mode === 'overview'
-                  ? 'Tap a field to edit it.'
-                  : isEditingField
+          {!(status === 'ready' && mode === 'overview') ? (
+            <div className="map-status-row">
+              <span className={`status-pill status-${status}`}>
+                {status === 'loading' && 'Loading map'}
+                {status === 'ready' && 'Map ready'}
+                {status === 'error' && 'Map error'}
+              </span>
+              <span className="map-meta" aria-live="polite">
+                {status === 'loading' && 'Connecting to Mapbox...'}
+                {status === 'ready' &&
+                  (isEditingField
                     ? 'Adjust the field details and save when ready.'
                     : 'Draw the field boundary and confirm it.')}
-              {status === 'error' && errorMessage}
-            </span>
-          </div>
+                {status === 'error' && errorMessage}
+              </span>
+            </div>
+          ) : null}
           <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
             <div
               id={mapId}
