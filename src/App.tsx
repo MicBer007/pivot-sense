@@ -4,8 +4,7 @@ import './App.css';
 import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'overview' | 'insights' | 'alerts' | 'fields';
-type SessionState = 'loading' | 'signed-out' | 'signed-in';
-type AuthMode = 'create-account' | 'sign-in';
+type AppState = 'loading' | 'signed-out' | 'signed-in';
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
 type PolygonGeometry = {
@@ -30,6 +29,15 @@ type RpcFieldRow = {
   id: string;
   field_name: string;
   boundary: unknown;
+};
+type RpcFarmerRow = {
+  id: string;
+  name: string;
+  was_created?: boolean;
+};
+type StoredFarmer = {
+  id: string;
+  name: string;
 };
 
 type TabConfig = {
@@ -82,24 +90,37 @@ const DEFAULT_ZOOM = Number(import.meta.env.VITE_MAPBOX_DEFAULT_ZOOM ?? 5);
 const SAVED_FIELDS_SOURCE_ID = 'saved-fields';
 const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
+const STORED_FARMER_KEY = 'pivot-sense.active-farmer';
 
-function normaliseIdentityPart(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '.')
-    .replace(/^\.+|\.+$/g, '')
-    .replace(/\.{2,}/g, '.');
+function readStoredFarmer() {
+  if (typeof window === 'undefined') return null;
+
+  const raw = window.localStorage.getItem(STORED_FARMER_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredFarmer>;
+    if (!parsed.id || !parsed.name) {
+      return null;
+    }
+
+    return {
+      id: parsed.id,
+      name: parsed.name,
+    } satisfies StoredFarmer;
+  } catch {
+    return null;
+  }
 }
 
-function buildSyntheticEmail(firstName: string, surname: string) {
-  const safeFirstName = normaliseIdentityPart(firstName) || 'farmer';
-  const safeSurname = normaliseIdentityPart(surname) || 'account';
-  return `${safeFirstName}.${safeSurname}@pivotsense.local`;
+function writeStoredFarmer(farmer: StoredFarmer) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(STORED_FARMER_KEY, JSON.stringify(farmer));
 }
 
-function buildFullName(firstName: string, surname: string) {
-  return `${firstName.trim()} ${surname.trim()}`.trim();
+function clearStoredFarmer() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(STORED_FARMER_KEY);
 }
 
 function isCoordinate(value: unknown): value is Coordinate {
@@ -377,7 +398,7 @@ function Logo() {
   );
 }
 
-function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
+function FieldMapPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
@@ -438,7 +459,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
   }
 
   async function loadFields() {
-    if (!supabase || !currentUserId) {
+    if (!supabase || !currentFarmerId) {
       setFields([]);
       setFieldsLoading(false);
       return;
@@ -447,7 +468,9 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
     setFieldsLoading(true);
     setFieldError(null);
 
-    const { data, error } = await supabase.rpc('get_my_fields');
+    const { data, error } = await supabase.rpc('get_fields_for_farmer', {
+      input_farmer_id: currentFarmerId,
+    });
 
     if (error) {
       setFieldError(error.message);
@@ -478,6 +501,11 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
       return;
     }
 
+    if (!currentFarmerId) {
+      setFieldError('Choose a farmer before saving a field.');
+      return;
+    }
+
     if (!fieldNameDraft.trim()) {
       setFieldError('Add the field name before confirming the boundary.');
       return;
@@ -493,6 +521,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
     setFieldMessage(null);
 
     const { error } = await supabase.rpc('create_field', {
+      input_farmer_id: currentFarmerId,
       input_field_name: fieldNameDraft.trim(),
       input_boundary: draftPolygon,
     });
@@ -513,7 +542,7 @@ function FieldMapPanel({ currentUserId }: { currentUserId: string }) {
 
   useEffect(() => {
     void loadFields();
-  }, [currentUserId]);
+  }, [currentFarmerId]);
 
   useEffect(() => {
     if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
@@ -853,186 +882,138 @@ function PlaceholderPanel({ tab }: { tab: TabConfig }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('fields');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [sessionState, setSessionState] = useState<SessionState>('loading');
-  const [authMode, setAuthMode] = useState<AuthMode>('create-account');
-  const [firstName, setFirstName] = useState('');
-  const [surname, setSurname] = useState('');
-  const [password, setPassword] = useState('');
-  const [passwordConfirm, setPasswordConfirm] = useState('');
-  const [currentUserName, setCurrentUserName] = useState('');
-  const [currentUserId, setCurrentUserId] = useState('');
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [creatingAccount, setCreatingAccount] = useState(false);
-  const [signingInWithPassword, setSigningInWithPassword] = useState(false);
+  const [appState, setAppState] = useState<AppState>('loading');
+  const [farmerNameInput, setFarmerNameInput] = useState('');
+  const [currentFarmerName, setCurrentFarmerName] = useState('');
+  const [currentFarmerId, setCurrentFarmerId] = useState('');
+  const [farmerMessage, setFarmerMessage] = useState<string | null>(null);
+  const [farmerError, setFarmerError] = useState<string | null>(null);
+  const [savingFarmer, setSavingFarmer] = useState(false);
   const activeConfig = tabs.find(({ id }) => id === activeTab) ?? tabs[0];
 
   useEffect(() => {
     if (!supabaseConfigured || !supabase) {
-      setSessionState('signed-out');
+      setAppState('signed-out');
       return;
     }
 
     let mounted = true;
+    const storedFarmer = readStoredFarmer();
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (!mounted) return;
+    if (!storedFarmer) {
+      setAppState('signed-out');
+      return () => {
+        mounted = false;
+      };
+    }
 
-      if (error) {
-        setAuthError(error.message);
-        setSessionState('signed-out');
-        return;
-      }
+    setFarmerNameInput(storedFarmer.name);
 
-      const fullName =
-        data.session?.user.user_metadata.full_name ??
-        buildFullName(
-          data.session?.user.user_metadata.first_name ?? '',
-          data.session?.user.user_metadata.surname ?? '',
-        );
-      setCurrentUserName(fullName);
-      setCurrentUserId(data.session?.user.id ?? '');
-      setSessionState(data.session ? 'signed-in' : 'signed-out');
-    });
+    supabase
+      .rpc('get_farmer', { input_farmer_id: storedFarmer.id })
+      .then(({ data, error }) => {
+        if (!mounted) return;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!mounted) return;
-      const fullName =
-        session?.user.user_metadata.full_name ??
-        buildFullName(
-          session?.user.user_metadata.first_name ?? '',
-          session?.user.user_metadata.surname ?? '',
-        );
-      setCurrentUserName(fullName);
-      setCurrentUserId(session?.user.id ?? '');
-      setSessionState(session ? 'signed-in' : 'signed-out');
-    });
+        if (error) {
+          clearStoredFarmer();
+          setFarmerError(error.message);
+          setAppState('signed-out');
+          return;
+        }
+
+        const farmer = (data as RpcFarmerRow[] | null)?.[0];
+        if (!farmer) {
+          clearStoredFarmer();
+          setAppState('signed-out');
+          return;
+        }
+
+        const nextFarmer = {
+          id: farmer.id,
+          name: farmer.name,
+        } satisfies StoredFarmer;
+
+        writeStoredFarmer(nextFarmer);
+        setCurrentFarmerId(nextFarmer.id);
+        setCurrentFarmerName(nextFarmer.name);
+        setFarmerMessage(null);
+        setFarmerError(null);
+        setAppState('signed-in');
+      });
 
     return () => {
       mounted = false;
-      subscription.unsubscribe();
     };
   }, []);
 
-  async function handleCreateAccount(event: FormEvent<HTMLFormElement>) {
+  async function handleFarmerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!supabaseConfigured || !supabase) {
-      setAuthError('Supabase auth is not configured yet.');
+      setFarmerError('Supabase is not configured yet.');
       return;
     }
 
-    if (password.length < 8) {
-      setAuthError('Use at least 8 characters for the password.');
+    if (!farmerNameInput.trim()) {
+      setFarmerError('Add a farmer name first.');
       return;
     }
 
-    if (password !== passwordConfirm) {
-      setAuthError('Passwords do not match.');
-      return;
-    }
+    setSavingFarmer(true);
+    setFarmerError(null);
+    setFarmerMessage(null);
 
-    const syntheticEmail = buildSyntheticEmail(firstName, surname);
-    const fullName = buildFullName(firstName, surname);
-
-    setCreatingAccount(true);
-    setAuthError(null);
-    setAuthMessage(null);
-
-    const { data, error } = await supabase.auth.signUp({
-      email: syntheticEmail,
-      password,
-      options: {
-        data: {
-          first_name: firstName.trim(),
-          surname: surname.trim(),
-          full_name: fullName,
-        },
-      },
+    const { data, error } = await supabase.rpc('upsert_farmer', {
+      input_name: farmerNameInput.trim(),
     });
 
-    setCreatingAccount(false);
+    setSavingFarmer(false);
 
     if (error) {
-      setAuthError(error.message);
+      setFarmerError(error.message);
       return;
     }
 
-    if (!data.session) {
-      setAuthError(
-        'Signup created an account but did not create a live session. Check whether email confirmation is still enabled in Supabase Auth.',
-      );
+    const farmer = (data as RpcFarmerRow[] | null)?.[0];
+    if (!farmer) {
+      setFarmerError('Farmer profile could not be created.');
       return;
     }
 
-    setPassword('');
-    setPasswordConfirm('');
-    setCurrentUserName(fullName);
-    setCurrentUserId(data.session.user.id);
-    setAuthMessage('Account created. This browser will keep the session cached.');
+    const nextFarmer = {
+      id: farmer.id,
+      name: farmer.name,
+    } satisfies StoredFarmer;
+
+    writeStoredFarmer(nextFarmer);
+    setCurrentFarmerId(nextFarmer.id);
+    setCurrentFarmerName(nextFarmer.name);
+    setFarmerMessage(
+      farmer.was_created
+        ? `Farmer profile created for ${farmer.name}.`
+        : `Continuing as ${farmer.name}.`,
+    );
+    setAppState('signed-in');
   }
 
-  async function handlePasswordSignIn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!supabaseConfigured || !supabase) {
-      setAuthError('Supabase auth is not configured yet.');
-      return;
-    }
-
-    setSigningInWithPassword(true);
-    setAuthError(null);
-    setAuthMessage(null);
-
-    const syntheticEmail = buildSyntheticEmail(firstName, surname);
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: syntheticEmail,
-      password,
-    });
-
-    setSigningInWithPassword(false);
-
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-
-    setPassword('');
-    setPasswordConfirm('');
-    const fullName =
-      data.user?.user_metadata.full_name ??
-      buildFullName(firstName, surname);
-    setCurrentUserName(fullName);
-    setCurrentUserId(data.user?.id ?? '');
-    setAuthMessage('Signed in. This browser will keep the session cached.');
+  function handleSwitchFarmer() {
+    clearStoredFarmer();
+    setFarmerMessage(null);
+    setFarmerError(null);
+    setCurrentFarmerId('');
+    setCurrentFarmerName('');
+    setFarmerNameInput('');
+    setAppState('signed-out');
   }
 
-  async function handleSignOut() {
-    if (!supabase) return;
-
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-
-    setAuthMessage(null);
-    setAuthError(null);
-    setCurrentUserName('');
-    setCurrentUserId('');
-  }
-
-  if (sessionState === 'loading') {
+  if (appState === 'loading') {
     return (
       <div className="page auth-page" id="top">
         <main className="auth-shell">
           <section className="auth-card">
             <Logo />
             <div className="auth-copy">
-              <h1>Checking session</h1>
+              <h1>Checking farmer profile</h1>
             </div>
           </section>
         </main>
@@ -1040,14 +1021,18 @@ export default function App() {
     );
   }
 
-  if (sessionState === 'signed-out') {
+  if (appState === 'signed-out') {
     return (
       <div className="page auth-page" id="top">
         <main className="auth-shell">
           <section className="auth-card" data-testid="auth-card">
             <Logo />
             <div className="auth-copy">
-              <h1>Sign in to view your fields</h1>
+              <h1>Open your farmer workspace</h1>
+              <p>
+                Enter a farmer name. This browser will remember that farmer and keep
+                field data linked to the same farmer record.
+              </p>
             </div>
 
             {!supabaseConfigured ? (
@@ -1059,158 +1044,40 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <>
-                <div className="auth-mode-switch" role="tablist" aria-label="Sign in method">
-                  <button
-                    type="button"
-                    className={authMode === 'create-account' ? 'auth-mode-button is-active' : 'auth-mode-button'}
-                    onClick={() => {
-                      setAuthMode('create-account');
-                      setAuthError(null);
-                      setAuthMessage(null);
-                    }}
-                  >
-                    Create account
-                  </button>
-                  <button
-                    type="button"
-                    className={authMode === 'sign-in' ? 'auth-mode-button is-active' : 'auth-mode-button'}
-                    onClick={() => {
-                      setAuthMode('sign-in');
-                      setAuthError(null);
-                      setAuthMessage(null);
-                    }}
-                  >
-                    Sign in
-                  </button>
-                </div>
-
-                {authMode === 'create-account' ? (
-                  <form className="auth-form" onSubmit={handleCreateAccount}>
-                    <label className="auth-label" htmlFor="first-name">
-                      Name
-                    </label>
-                    <input
-                      id="first-name"
-                      className="auth-input"
-                      type="text"
-                      name="first-name"
-                      autoComplete="given-name"
-                      value={firstName}
-                      onChange={(event) => setFirstName(event.target.value)}
-                      required
-                    />
-                    <label className="auth-label" htmlFor="surname">
-                      Surname
-                    </label>
-                    <input
-                      id="surname"
-                      className="auth-input"
-                      type="text"
-                      name="surname"
-                      autoComplete="family-name"
-                      value={surname}
-                      onChange={(event) => setSurname(event.target.value)}
-                      required
-                    />
-                    <label className="auth-label" htmlFor="create-password">
-                      Password
-                    </label>
-                    <input
-                      id="create-password"
-                      className="auth-input"
-                      type="password"
-                      name="password"
-                      autoComplete="new-password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      required
-                      minLength={8}
-                    />
-                    <label className="auth-label" htmlFor="confirm-password">
-                      Confirm password
-                    </label>
-                    <input
-                      id="confirm-password"
-                      className="auth-input"
-                      type="password"
-                      name="confirm-password"
-                      autoComplete="new-password"
-                      value={passwordConfirm}
-                      onChange={(event) => setPasswordConfirm(event.target.value)}
-                      required
-                      minLength={8}
-                    />
-                    <button
-                      type="submit"
-                      className="btn btn-primary auth-submit"
-                      disabled={creatingAccount}
-                    >
-                      {creatingAccount ? 'Creating account...' : 'Create account'}
-                    </button>
-                  </form>
-                ) : (
-                  <form className="auth-form" onSubmit={handlePasswordSignIn}>
-                    <label className="auth-label" htmlFor="sign-in-name">
-                      Name
-                    </label>
-                    <input
-                      id="sign-in-name"
-                      className="auth-input"
-                      type="text"
-                      name="first-name"
-                      autoComplete="given-name"
-                      value={firstName}
-                      onChange={(event) => setFirstName(event.target.value)}
-                      required
-                    />
-                    <label className="auth-label" htmlFor="sign-in-surname">
-                      Surname
-                    </label>
-                    <input
-                      id="sign-in-surname"
-                      className="auth-input"
-                      type="text"
-                      name="surname"
-                      autoComplete="family-name"
-                      value={surname}
-                      onChange={(event) => setSurname(event.target.value)}
-                      required
-                    />
-                    <label className="auth-label" htmlFor="sign-in-password">
-                      Password
-                    </label>
-                    <input
-                      id="sign-in-password"
-                      className="auth-input"
-                      type="password"
-                      name="password"
-                      autoComplete="current-password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      required
-                    />
-                    <button
-                      type="submit"
-                      className="btn btn-primary auth-submit"
-                      disabled={signingInWithPassword}
-                    >
-                      {signingInWithPassword ? 'Signing in...' : 'Sign in'}
-                    </button>
-                  </form>
-                )}
-              </>
+              <form className="auth-form" onSubmit={handleFarmerSubmit}>
+                <label className="auth-label" htmlFor="farmer-name">
+                  Name
+                </label>
+                <input
+                  id="farmer-name"
+                  className="auth-input"
+                  type="text"
+                  name="farmer-name"
+                  autoComplete="name"
+                  value={farmerNameInput}
+                  onChange={(event) => setFarmerNameInput(event.target.value)}
+                  placeholder="Frikkie Demo Farmer"
+                  required
+                />
+                <button
+                  type="submit"
+                  className="btn btn-primary auth-submit"
+                  disabled={savingFarmer}
+                >
+                  {savingFarmer ? 'Opening workspace...' : 'Continue'}
+                </button>
+              </form>
             )}
 
-            {authMessage ? (
+            {farmerMessage ? (
               <p className="auth-feedback auth-feedback-success" aria-live="polite">
-                {authMessage}
+                {farmerMessage}
               </p>
             ) : null}
 
-            {authError ? (
+            {farmerError ? (
               <p className="auth-feedback auth-feedback-error" aria-live="polite">
-                {authError}
+                {farmerError}
               </p>
             ) : null}
           </section>
@@ -1239,8 +1106,8 @@ export default function App() {
             ))}
           </nav>
           <div className="nav-cta">
-            <button type="button" className="btn btn-secondary" onClick={() => void handleSignOut()}>
-              Sign out
+            <button type="button" className="btn btn-secondary" onClick={handleSwitchFarmer}>
+              Switch farmer
             </button>
           </div>
           <button
@@ -1278,10 +1145,10 @@ export default function App() {
               className="btn btn-secondary mobile-cta mobile-menu-button"
               onClick={() => {
                 setMenuOpen(false);
-                void handleSignOut();
+                handleSwitchFarmer();
               }}
             >
-              Sign out
+              Switch farmer
             </button>
           </div>
         ) : null}
@@ -1294,21 +1161,20 @@ export default function App() {
               <span className="badge">PivotSense</span>
               <h1>Farmer workspace</h1>
               <p>
-                Signed-in workspace for each farmer, with field data protected by
-                Supabase RLS and a dedicated field map screen for Mapbox
-                integration.
+                Demo farmer workspaces now use a custom farmer table and a cached
+                browser identity instead of Supabase Auth.
               </p>
             </div>
             <div className="account-card">
-              <p className="eyebrow">Account</p>
-              <h2>Signed in</h2>
+              <p className="eyebrow">Farmer</p>
+              <h2>Workspace active</h2>
               <p>
-                {currentUserName || 'Farmer'} is signed in. This browser keeps the
-                session cached for easier access on the same device.
+                {currentFarmerName || 'Farmer'} is active on this browser. Field data
+                is linked to that farmer record in Supabase.
               </p>
               <p className="account-note">
-                Email linking can be added later without changing the field RLS
-                structure.
+                This is a lightweight demo flow and does not provide real account
+                security.
               </p>
             </div>
           </section>
@@ -1322,7 +1188,7 @@ export default function App() {
             </header>
 
             {activeTab === 'fields' ? (
-              <FieldMapPanel currentUserId={currentUserId} />
+              <FieldMapPanel currentFarmerId={currentFarmerId} />
             ) : (
               <PlaceholderPanel tab={activeConfig} />
             )}
