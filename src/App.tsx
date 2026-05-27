@@ -816,6 +816,26 @@ function ensureActionMapLayers(map: mapboxgl.Map) {
     });
   }
 
+  if (!map.getLayer('action-fields-label')) {
+    map.addLayer({
+      id: 'action-fields-label',
+      type: 'symbol',
+      source: ACTION_FIELDS_SOURCE_ID,
+      layout: {
+        'text-field': ['get', 'fieldName'],
+        'text-size': 13,
+        'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+        'text-allow-overlap': false,
+        'symbol-placement': 'point',
+      },
+      paint: {
+        'text-color': '#0f172a',
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 1.5,
+      },
+    });
+  }
+
   if (!map.getLayer('action-selected-field-fill')) {
     map.addLayer({
       id: 'action-selected-field-fill',
@@ -1977,6 +1997,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const firstCameraSyncRef = useRef(true);
+  const lastCameraFitKeyRef = useRef<string | null>(null);
   const pivotDragActiveRef = useRef(false);
   const pivotPointerIdRef = useRef<number | null>(null);
   const selectedCircleRef = useRef<{ center: Coordinate; radiusMeters: number } | null>(null);
@@ -1992,7 +2013,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [endDate, setEndDate] = useState<string>(() => todayDateString());
   const [newAngle, setNewAngle] = useState<number>(0);
   const [dragSweepDirection, setDragSweepDirection] = useState<PivotSweepDirection>(1);
-  const [movementOverride, setMovementOverride] = useState<string>('');
   const [mmAppliedRaw, setMmAppliedRaw] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -2001,11 +2021,8 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
   const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
   const startAngle = selectedField?.pivotAngleDegrees ?? 0;
-  const draggedMovement = computeDirectionalMovement(startAngle, newAngle, dragSweepDirection);
-  const movementDegrees = movementOverride.trim() === ''
-    ? draggedMovement
-    : Math.max(0, Math.min(360, Math.round(Number(movementOverride) || 0)));
-  const sweepDirection = movementOverride.trim() === '' ? dragSweepDirection : 1;
+  const movementDegrees = computeDirectionalMovement(startAngle, newAngle, dragSweepDirection);
+  const sweepDirection = dragSweepDirection;
   const movementPct = movementDegrees / 360;
   const mmAppliedNumber = Number(mmAppliedRaw);
   const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
@@ -2074,7 +2091,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   useEffect(() => {
     if (selectedField) {
       setNewAngle(selectedField.pivotAngleDegrees ?? 0);
-      setMovementOverride('');
       resetDragMovement();
     }
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
@@ -2096,6 +2112,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
     let cancelled = false;
     firstCameraSyncRef.current = true;
+    lastCameraFitKeyRef.current = null;
     setMapStatus('loading');
     const initialBounds = getPolygonsBounds(
       (selectedField ? [selectedField] : pivotFields).map((field) => field.boundary),
@@ -2194,6 +2211,11 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     const map = mapInstanceRef.current;
     if (!map || mapStatus !== 'ready') return;
 
+    const fitKey = selectedField
+      ? `selected:${selectedField.id}`
+      : `all:${pivotFields.map((field) => field.id).sort().join(',')}`;
+    if (lastCameraFitKeyRef.current === fitKey) return;
+
     const polygons = selectedField ? [selectedField.boundary] : pivotFields.map((field) => field.boundary);
     if (polygons.length === 0) {
       map.easeTo({
@@ -2202,6 +2224,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         duration: firstCameraSyncRef.current ? 0 : 900,
       });
       firstCameraSyncRef.current = false;
+      lastCameraFitKeyRef.current = fitKey;
       return;
     }
 
@@ -2214,6 +2237,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         duration: firstCameraSyncRef.current ? 0 : 900,
       });
       firstCameraSyncRef.current = false;
+      lastCameraFitKeyRef.current = fitKey;
     }
   }, [mapStatus, pivotFields, selectedField]);
 
@@ -2236,7 +2260,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       const nextAngle = getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]);
       const previousAngle = lastDragAngleRef.current;
       setNewAngle(nextAngle);
-      setMovementOverride('');
 
       if (!trackMovement) {
         lastDragAngleRef.current = nextAngle;
@@ -2434,7 +2457,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       `Logged ${effectiveMm.toFixed(2)} mm across ${selectedField.fieldName}.`,
     );
     setMmAppliedRaw('');
-    setMovementOverride('');
     await loadPivotFields(false);
   }
 
@@ -2462,6 +2484,21 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
           the pivot put down at full output.
         </p>
       </header>
+
+      {!loadingFields ? (
+        <div className="actions-date-row">
+          <label className="auth-label" htmlFor="actions-end-date">
+            Action date
+          </label>
+          <input
+            id="actions-end-date"
+            className="auth-input"
+            type="date"
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
+        </div>
+      ) : null}
 
       {loadingFields ? (
         <div className="map-state-card">
@@ -2499,77 +2536,8 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
       {!loadingFields ? (
         <div className="actions-form">
-          <label className="auth-label" htmlFor="actions-end-date">
-            Action date
-          </label>
-          <input
-            id="actions-end-date"
-            className="auth-input"
-            type="date"
-            value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-          />
-
           {selectedField ? (
             <>
-              <div className="pivot-map-readout">
-                <strong>{selectedField.fieldName}</strong>
-                <dl className="pivot-angle-grid">
-                  <div>
-                    <dt>Start</dt>
-                    <dd>{normalizeAngleDegrees(startAngle)} deg</dd>
-                  </div>
-                  <div>
-                    <dt>End</dt>
-                    <dd>{normalizeAngleDegrees(newAngle)} deg</dd>
-                  </div>
-                  <div>
-                    <dt>Movement</dt>
-                    <dd>{movementDegrees} deg ({(movementPct * 100).toFixed(1)}%)</dd>
-                  </div>
-                </dl>
-              </div>
-
-              <div className="actions-quick-row">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setMovementOverride('360');
-                    setNewAngle(normalizeAngleDegrees(startAngle));
-                    resetDragMovement();
-                  }}
-                >
-                  Full sweep (360 deg)
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setMovementOverride('');
-                    setNewAngle(normalizeAngleDegrees(startAngle));
-                    resetDragMovement();
-                  }}
-                >
-                  Reset to start
-                </button>
-              </div>
-
-              <label className="auth-label" htmlFor="actions-movement-override">
-                Movement (degrees) - override
-              </label>
-              <input
-                id="actions-movement-override"
-                className="auth-input"
-                type="number"
-                min={0}
-                max={360}
-                step={1}
-                placeholder={`${draggedMovement}`}
-                value={movementOverride}
-                onChange={(event) => setMovementOverride(event.target.value)}
-              />
-
               <label className="auth-label" htmlFor="actions-mm">
                 Millimetres at pivot
               </label>
