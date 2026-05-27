@@ -26,6 +26,7 @@ type LineStringGeometry = {
   type: 'LineString';
   coordinates: Coordinate[];
 };
+type PivotSweepDirection = 1 | -1;
 type MapFeature = {
   type: 'Feature';
   geometry: PolygonGeometry | PointGeometry | LineStringGeometry;
@@ -452,6 +453,16 @@ function getPolygonBounds(polygon: PolygonGeometry) {
   return bounds;
 }
 
+function getPolygonsBounds(polygons: PolygonGeometry[]) {
+  const bounds = polygons.reduce((currentBounds, polygon) => {
+    const nextBounds = getPolygonBounds(polygon);
+    nextBounds.toArray().forEach((point) => currentBounds.extend(point));
+    return currentBounds;
+  }, new mapboxgl.LngLatBounds());
+
+  return bounds.isEmpty() ? null : bounds;
+}
+
 function createCirclePolygon(center: Coordinate, radiusMeters: number, steps = 48): PolygonGeometry {
   const latRadians = (center[1] * Math.PI) / 180;
   const latDegreesPerMeter = 1 / 111320;
@@ -567,6 +578,7 @@ function buildPivotSweepGeoJson(
   radiusMeters: number | null,
   startAngle: number,
   movementDegrees: number,
+  direction: PivotSweepDirection = 1,
 ): FeatureCollection {
   if (!center || !radiusMeters || radiusMeters <= 0 || movementDegrees <= 0) {
     return {
@@ -580,7 +592,7 @@ function buildPivotSweepGeoJson(
   const ring: Coordinate[] = [center];
 
   for (let index = 0; index <= steps; index += 1) {
-    const angle = startAngle + (normalizedMovement * index) / steps;
+    const angle = startAngle + (direction * normalizedMovement * index) / steps;
     ring.push(getCircleCoordinate(center, radiusMeters, angle));
   }
 
@@ -1103,6 +1115,8 @@ function FieldMapPanel({
   const pivotPointerIdRef = useRef<number | null>(null);
   const activePivotCenterRef = useRef<Coordinate | null>(null);
   const draftPivotHandleRef = useRef<Coordinate | null>(null);
+  const selectedFieldRef = useRef<FieldRecord | null>(null);
+  const firstCameraSyncRef = useRef(true);
   const isAddingFieldRef = useRef(false);
   const isEditingFieldRef = useRef(false);
   const drawModeRef = useRef<DrawMode>('circle');
@@ -1299,11 +1313,18 @@ function FieldMapPanel({
     setFieldMessage(`Saved ${savedFieldName}.`);
     setFieldNameDraft('');
     resetDraftState('circle');
+    if (onFieldSaved) {
+      onFieldSaved(savedFieldName);
+      return;
+    }
     await loadFields();
-    onFieldSaved?.(savedFieldName);
   }
 
   async function handleSaveFieldChanges() {
+    const fieldToSave =
+      selectedField ??
+      (selectedFieldRef.current?.id === editedFieldId ? selectedFieldRef.current : null);
+
     if (!supabase) {
       setFieldError('Supabase is not configured.');
       return;
@@ -1314,7 +1335,7 @@ function FieldMapPanel({
       return;
     }
 
-    if (!selectedField) {
+    if (!fieldToSave) {
       setFieldError('Field not found.');
       return;
     }
@@ -1330,9 +1351,9 @@ function FieldMapPanel({
 
     const { error } = await supabase.rpc('update_field', {
       input_farmer_id: currentFarmerId,
-      input_field_id: selectedField.id,
+      input_field_id: fieldToSave.id,
       input_field_name: fieldNameDraft.trim(),
-      input_pivot_angle_degrees: selectedField.fieldType === 'pivot' ? pivotAngleDraft : null,
+      input_pivot_angle_degrees: fieldToSave.fieldType === 'pivot' ? pivotAngleDraft : null,
     });
 
     setSavingField(false);
@@ -1344,22 +1365,29 @@ function FieldMapPanel({
 
     const savedFieldName = fieldNameDraft.trim();
     setFieldMessage(`Updated ${savedFieldName}.`);
+    if (onFieldSaved) {
+      onFieldSaved(savedFieldName);
+      return;
+    }
     await loadFields();
-    onFieldSaved?.(savedFieldName);
   }
 
   async function handleDeleteField() {
+    const fieldToDelete =
+      selectedField ??
+      (selectedFieldRef.current?.id === editedFieldId ? selectedFieldRef.current : null);
+
     if (!supabase) {
       setFieldError('Supabase is not configured.');
       return;
     }
 
-    if (!selectedField) {
+    if (!fieldToDelete) {
       setFieldError('Field not found.');
       return;
     }
 
-    if (typeof window !== 'undefined' && !window.confirm(`Delete ${selectedField.fieldName}?`)) {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete ${fieldToDelete.fieldName}?`)) {
       return;
     }
 
@@ -1369,7 +1397,7 @@ function FieldMapPanel({
 
     const { error } = await supabase.rpc('delete_field', {
       input_farmer_id: currentFarmerId,
-      input_field_id: selectedField.id,
+      input_field_id: fieldToDelete.id,
     });
 
     setDeletingField(false);
@@ -1379,7 +1407,7 @@ function FieldMapPanel({
       return;
     }
 
-    onFieldDeleted?.(selectedField.fieldName);
+    onFieldDeleted?.(fieldToDelete.fieldName);
   }
 
   useEffect(() => {
@@ -1405,26 +1433,40 @@ function FieldMapPanel({
 
   useEffect(() => {
     if (!isEditingField || !selectedField) return;
+    selectedFieldRef.current = selectedField;
     setFieldNameDraft(selectedField.fieldName);
     setPivotAngleDraft(selectedField.pivotAngleDegrees ?? 0);
   }, [isEditingField, selectedField]);
 
   useEffect(() => {
-    if (!MAPBOX_ACCESS_TOKEN || !mapRef.current) {
+    if (!MAPBOX_ACCESS_TOKEN || !mapRef.current || fieldsLoading || mapInstanceRef.current) {
       return;
     }
 
     mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 
     let cancelled = false;
+    firstCameraSyncRef.current = true;
     setStatus('loading');
+    const initialBounds = getPolygonsBounds(visibleFields.map((field) => field.boundary));
 
     try {
       const map = new mapboxgl.Map({
         container: mapRef.current,
         style: MAPBOX_STYLE_URL,
-        center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        ...(initialBounds
+          ? {
+              bounds: initialBounds,
+              fitBoundsOptions: {
+                padding: 72,
+                maxZoom: 15,
+                duration: 0,
+              },
+            }
+          : {
+              center: DEFAULT_CENTER,
+              zoom: DEFAULT_ZOOM,
+            }),
         attributionControl: true,
         clickTolerance: 10,
       });
@@ -1457,7 +1499,7 @@ function FieldMapPanel({
       mapInstanceRef.current?.remove();
       mapInstanceRef.current = null;
     };
-  }, []);
+  }, [fieldsLoading]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1492,24 +1534,23 @@ function FieldMapPanel({
       map.easeTo({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
       return;
     }
 
-    const polygons = draftPolygon ? [draftPolygon] : visibleFields.map((field) => field.boundary);
-    const bounds = polygons.reduce((currentBounds, polygon) => {
-      const nextBounds = getPolygonBounds(polygon);
-      nextBounds.toArray().forEach((point) => currentBounds.extend(point));
-      return currentBounds;
-    }, new mapboxgl.LngLatBounds());
+    const bounds = getPolygonsBounds(
+      draftPolygon ? [draftPolygon] : visibleFields.map((field) => field.boundary),
+    );
 
-    if (!bounds.isEmpty()) {
+    if (bounds) {
       map.fitBounds(bounds, {
         padding: 72,
         maxZoom: 15,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
     }
   }, [status, visibleFields, draftPolygon]);
 
@@ -1905,10 +1946,27 @@ function todayDateString() {
   return `${year}-${month}-${day}`;
 }
 
-function computeClockwiseMovement(startAngle: number, endAngle: number) {
+const PIVOT_DRAG_JITTER_DEGREES = 2;
+const PIVOT_DIRECTION_SWITCH_DEGREES = 12;
+
+function computeSignedAngleDelta(fromAngle: number, toAngle: number) {
+  const from = normalizeAngleDegrees(fromAngle);
+  const to = normalizeAngleDegrees(toAngle);
+  return ((to - from + 540) % 360) - 180;
+}
+
+function computeDirectionalMovement(
+  startAngle: number,
+  endAngle: number,
+  direction: PivotSweepDirection,
+) {
   const start = normalizeAngleDegrees(startAngle);
   const end = normalizeAngleDegrees(endAngle);
-  return (end - start + 360) % 360;
+  return direction === 1 ? (end - start + 360) % 360 : (start - end + 360) % 360;
+}
+
+function computeAngleDistance(angleA: number, angleB: number) {
+  return Math.abs(computeSignedAngleDelta(angleA, angleB));
 }
 
 function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
@@ -1918,10 +1976,14 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const firstCameraSyncRef = useRef(true);
   const pivotDragActiveRef = useRef(false);
   const pivotPointerIdRef = useRef<number | null>(null);
   const selectedCircleRef = useRef<{ center: Coordinate; radiusMeters: number } | null>(null);
   const endPivotHandleRef = useRef<Coordinate | null>(null);
+  const lastDragAngleRef = useRef<number | null>(null);
+  const startAngleRef = useRef(0);
+  const dragSweepDirectionRef = useRef<PivotSweepDirection>(1);
   const [selectedFieldId, setSelectedFieldId] = useState('');
   const [mapStatus, setMapStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
@@ -1929,6 +1991,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [, setMapErrorMessage] = useState<string | null>(null);
   const [endDate, setEndDate] = useState<string>(() => todayDateString());
   const [newAngle, setNewAngle] = useState<number>(0);
+  const [dragSweepDirection, setDragSweepDirection] = useState<PivotSweepDirection>(1);
   const [movementOverride, setMovementOverride] = useState<string>('');
   const [mmAppliedRaw, setMmAppliedRaw] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -1938,10 +2001,11 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
   const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
   const startAngle = selectedField?.pivotAngleDegrees ?? 0;
-  const draggedMovement = computeClockwiseMovement(startAngle, newAngle);
+  const draggedMovement = computeDirectionalMovement(startAngle, newAngle, dragSweepDirection);
   const movementDegrees = movementOverride.trim() === ''
     ? draggedMovement
     : Math.max(0, Math.min(360, Math.round(Number(movementOverride) || 0)));
+  const sweepDirection = movementOverride.trim() === '' ? dragSweepDirection : 1;
   const movementPct = movementDegrees / 360;
   const mmAppliedNumber = Number(mmAppliedRaw);
   const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
@@ -1975,10 +2039,17 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         ]
       : [];
 
+  function resetDragMovement(direction: PivotSweepDirection = 1) {
+    lastDragAngleRef.current = null;
+    dragSweepDirectionRef.current = direction;
+    setDragSweepDirection(direction);
+  }
+
   useEffect(() => {
     selectedCircleRef.current = selectedCircle;
     endPivotHandleRef.current = endPivotHandle;
-  }, [selectedCircle, endPivotHandle]);
+    startAngleRef.current = startAngle;
+  }, [selectedCircle, endPivotHandle, startAngle]);
 
   async function loadPivotFields(showLoading = true) {
     if (!currentFarmerId) return;
@@ -2004,8 +2075,17 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     if (selectedField) {
       setNewAngle(selectedField.pivotAngleDegrees ?? 0);
       setMovementOverride('');
+      resetDragMovement();
     }
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
+
+  useEffect(() => {
+    if (selectedFieldId && pivotFields.some((field) => field.id === selectedFieldId)) {
+      return;
+    }
+
+    setSelectedFieldId(pivotFields[0]?.id ?? '');
+  }, [pivotFields, selectedFieldId]);
 
   useEffect(() => {
     if (loadingFields || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
@@ -2015,14 +2095,29 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 
     let cancelled = false;
+    firstCameraSyncRef.current = true;
     setMapStatus('loading');
+    const initialBounds = getPolygonsBounds(
+      (selectedField ? [selectedField] : pivotFields).map((field) => field.boundary),
+    );
 
     try {
       const map = new mapboxgl.Map({
         container: mapRef.current,
         style: MAPBOX_STYLE_URL,
-        center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        ...(initialBounds
+          ? {
+              bounds: initialBounds,
+              fitBoundsOptions: {
+                padding: 72,
+                maxZoom: 15,
+                duration: 0,
+              },
+            }
+          : {
+              center: DEFAULT_CENTER,
+              zoom: DEFAULT_ZOOM,
+            }),
         attributionControl: true,
         clickTolerance: 10,
       });
@@ -2078,6 +2173,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         selectedCircle?.radiusMeters ?? null,
         startAngle,
         movementDegrees,
+        sweepDirection,
       ),
     );
     setGeoJsonSourceData(map, ACTION_START_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(selectedPivotEntry));
@@ -2091,6 +2187,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     endPivotEntry,
     startAngle,
     movementDegrees,
+    sweepDirection,
   ]);
 
   useEffect(() => {
@@ -2102,23 +2199,21 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       map.easeTo({
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
       return;
     }
 
-    const bounds = polygons.reduce((currentBounds, polygon) => {
-      const nextBounds = getPolygonBounds(polygon);
-      nextBounds.toArray().forEach((point) => currentBounds.extend(point));
-      return currentBounds;
-    }, new mapboxgl.LngLatBounds());
+    const bounds = getPolygonsBounds(polygons);
 
-    if (!bounds.isEmpty()) {
+    if (bounds) {
       map.fitBounds(bounds, {
         padding: 72,
         maxZoom: 15,
-        duration: 900,
+        duration: firstCameraSyncRef.current ? 0 : 900,
       });
+      firstCameraSyncRef.current = false;
     }
   }, [mapStatus, pivotFields, selectedField]);
 
@@ -2135,11 +2230,41 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       return map.unproject(point);
     }
 
-    function updatePivotHandleFromLngLat(lngLat: mapboxgl.LngLat) {
+    function updatePivotHandleFromLngLat(lngLat: mapboxgl.LngLat, trackMovement = true) {
       const circle = selectedCircleRef.current;
       if (!circle) return;
-      setNewAngle(getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]));
+      const nextAngle = getPivotAngleDegrees(circle.center, [lngLat.lng, lngLat.lat]);
+      const previousAngle = lastDragAngleRef.current;
+      setNewAngle(nextAngle);
       setMovementOverride('');
+
+      if (!trackMovement) {
+        lastDragAngleRef.current = nextAngle;
+        return;
+      }
+
+      if (previousAngle === null) {
+        lastDragAngleRef.current = nextAngle;
+        return;
+      }
+
+      const delta = computeSignedAngleDelta(previousAngle, nextAngle);
+      lastDragAngleRef.current = nextAngle;
+
+      if (Math.abs(delta) < PIVOT_DRAG_JITTER_DEGREES) {
+        return;
+      }
+
+      const wasNearStart =
+        computeAngleDistance(startAngleRef.current, previousAngle) <= PIVOT_DIRECTION_SWITCH_DEGREES;
+      const isNearStart =
+        computeAngleDistance(startAngleRef.current, nextAngle) <= PIVOT_DIRECTION_SWITCH_DEGREES;
+
+      if (wasNearStart || isNearStart) {
+        const nextDirection: PivotSweepDirection = delta < 0 ? -1 : 1;
+        dragSweepDirectionRef.current = nextDirection;
+        setDragSweepDirection(nextDirection);
+      }
     }
 
     function updateCursorFromPointerEvent(event: PointerEvent) {
@@ -2217,12 +2342,16 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       }
 
       event.preventDefault();
+      const circle = selectedCircleRef.current;
+      const pointerLngLat = getLngLatFromPointerEvent(event);
+      const pointerAngle = getPivotAngleDegrees(circle.center, [pointerLngLat.lng, pointerLngLat.lat]);
+      lastDragAngleRef.current = pointerAngle;
       pivotDragActiveRef.current = true;
       pivotPointerIdRef.current = event.pointerId;
       canvas.style.cursor = 'grabbing';
       map.dragPan.disable();
       canvasElement.setPointerCapture(event.pointerId);
-      updatePivotHandleFromLngLat(getLngLatFromPointerEvent(event));
+      updatePivotHandleFromLngLat(pointerLngLat, false);
     }
 
     function handlePointerMove(event: PointerEvent) {
@@ -2347,29 +2476,29 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </p>
       ) : null}
 
+      {!loadingFields && !MAPBOX_ACCESS_TOKEN ? (
+        <div className="map-state-card" data-testid="maps-setup-needed">
+          <h3>Mapbox setup needed</h3>
+          <p>
+            Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
+            before logging pivot actions on the map.
+          </p>
+        </div>
+      ) : null}
+
+      {!loadingFields && MAPBOX_ACCESS_TOKEN ? (
+        <div className="map-stage actions-map-stage">
+          <div
+            id={mapId}
+            ref={mapRef}
+            className="map-canvas actions-map-canvas"
+            data-testid="actions-map-canvas"
+          />
+        </div>
+      ) : null}
+
       {!loadingFields ? (
         <div className="actions-form">
-          {!MAPBOX_ACCESS_TOKEN ? (
-            <div className="map-state-card" data-testid="maps-setup-needed">
-              <h3>Mapbox setup needed</h3>
-              <p>
-                Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env
-                before logging pivot actions on the map.
-              </p>
-            </div>
-          ) : (
-            <div className="actions-map-shell">
-              <div className="map-stage">
-                <div
-                  id={mapId}
-                  ref={mapRef}
-                  className="map-canvas actions-map-canvas"
-                  data-testid="actions-map-canvas"
-                />
-              </div>
-            </div>
-          )}
-
           <label className="auth-label" htmlFor="actions-end-date">
             Action date
           </label>
@@ -2408,6 +2537,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                   onClick={() => {
                     setMovementOverride('360');
                     setNewAngle(normalizeAngleDegrees(startAngle));
+                    resetDragMovement();
                   }}
                 >
                   Full sweep (360 deg)
@@ -2418,6 +2548,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                   onClick={() => {
                     setMovementOverride('');
                     setNewAngle(normalizeAngleDegrees(startAngle));
+                    resetDragMovement();
                   }}
                 >
                   Reset to start
@@ -2827,7 +2958,9 @@ export default function App() {
           {activeScreen === 'workspace' ? (
             <section
               className={
-                activeTab === 'fields' ? 'workspace-card' : 'content-card workspace-card'
+                activeTab === 'fields' || activeTab === 'actions'
+                  ? 'workspace-card'
+                  : 'content-card workspace-card'
               }
             >
               {activeTab === 'fields' ? (

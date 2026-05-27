@@ -16,9 +16,9 @@ test('capture add field flow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByRole('button', { name: 'Add field', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add a field', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Add field', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a field', exact: true }).click();
   await expect(page).toHaveURL(/\/fields\/add$/);
   await expect(page.getByRole('heading', { name: 'Add field' })).toBeVisible();
   await expect(page.getByTestId('mapbox-canvas')).toBeVisible();

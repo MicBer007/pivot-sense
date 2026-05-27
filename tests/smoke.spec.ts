@@ -1,6 +1,7 @@
 import { test, expect } from './web-fixture';
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 const envEntries = readFileSync('.env', 'utf-8')
   .split(/\r?\n/)
@@ -20,7 +21,7 @@ const supabasePublishableKey = envMap.get('VITE_SUPABASE_PUBLISHABLE_KEY') ?? ''
 
 async function seedEditableField() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
-  const suffix = Date.now().toString().slice(-6);
+  const suffix = randomUUID().slice(0, 8);
   const farmerName = `Edit Farmer ${suffix}`;
 
   const { data: farmerRows, error: farmerError } = await client.rpc('upsert_farmer', {
@@ -110,16 +111,13 @@ test('navbar tabs navigate to their route roots', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Field boundaries' })).toBeVisible();
   await expect(page).toHaveURL(/\/fields$/);
 
-  await page.getByRole('button', { name: 'Overview', exact: true }).click();
-  await expect(page).toHaveURL(/\/overview$/);
+  await page.getByRole('button', { name: 'Actions', exact: true }).click();
+  await expect(page).toHaveURL(/\/actions$/);
 
   await page.getByRole('button', { name: 'Insights', exact: true }).click();
   await expect(page).toHaveURL(/\/insights$/);
 
-  await page.getByRole('button', { name: 'Alerts', exact: true }).click();
-  await expect(page).toHaveURL(/\/alerts$/);
-
-  await page.getByRole('button', { name: 'Fields', exact: true }).click();
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
   await expect(page).toHaveURL(/\/fields$/);
 });
 

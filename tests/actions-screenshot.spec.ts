@@ -2,6 +2,7 @@ import { test, expect } from './web-fixture';
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const envEntries = readFileSync('.env', 'utf-8')
   .split(/\r?\n/)
@@ -21,7 +22,7 @@ const supabasePublishableKey = envMap.get('VITE_SUPABASE_PUBLISHABLE_KEY') ?? ''
 
 async function seedPivotFarmer() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
-  const suffix = Date.now().toString().slice(-6);
+  const suffix = randomUUID().slice(0, 8);
   const farmerName = `Action Farmer ${suffix}`;
 
   const { data: farmerRows, error: farmerError } = await client.rpc('upsert_farmer', {
