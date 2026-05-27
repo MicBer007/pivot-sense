@@ -1029,52 +1029,51 @@ function FieldEditorCard({
   onDelete?: () => void;
 }) {
   return (
-    <div className="field-creation-card">
-      <div className="field-creation-grid">
-        <div className="field-meta-banner" aria-live="polite">
-          <span className="field-type-pill">{formatFieldType(fieldType)} field</span>
+    <>
+      {fieldType === 'pivot' ? (
+        <div className="field-creation-card">
+          <div className="field-creation-grid">
+            <p className="pivot-angle-readout">
+              Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
+            </p>
+          </div>
         </div>
-        {fieldType === 'pivot' ? (
-          <p className="pivot-angle-readout">
-            Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
-          </p>
+      ) : null}
+      <div className="field-action-row">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onPrimaryAction}
+          disabled={disablePrimaryAction}
+        >
+          {savingField
+            ? mode === 'create'
+              ? 'Saving field...'
+              : 'Saving changes...'
+            : mode === 'create'
+              ? 'Confirm boundary'
+              : 'Save changes'}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={onCancel}>
+          Cancel
+        </button>
+        {mode === 'create' && onResetDraft ? (
+          <button type="button" className="btn btn-secondary" onClick={onResetDraft}>
+            Reset draft
+          </button>
         ) : null}
-        <div className="field-action-row">
+        {mode === 'edit' && onDelete ? (
           <button
             type="button"
-            className="btn btn-primary"
-            onClick={onPrimaryAction}
-            disabled={disablePrimaryAction}
+            className="btn btn-secondary btn-danger"
+            onClick={onDelete}
+            disabled={deletingField}
           >
-            {savingField
-              ? mode === 'create'
-                ? 'Saving field...'
-                : 'Saving changes...'
-              : mode === 'create'
-                ? 'Confirm boundary'
-                : 'Save changes'}
+            {deletingField ? 'Deleting field...' : 'Delete field'}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>
-            Cancel
-          </button>
-          {mode === 'create' && onResetDraft ? (
-            <button type="button" className="btn btn-secondary" onClick={onResetDraft}>
-              Reset draft
-            </button>
-          ) : null}
-          {mode === 'edit' && onDelete ? (
-            <button
-              type="button"
-              className="btn btn-secondary btn-danger"
-              onClick={onDelete}
-              disabled={deletingField}
-            >
-              {deletingField ? 'Deleting field...' : 'Delete field'}
-            </button>
-          ) : null}
-        </div>
+        ) : null}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1768,20 +1767,10 @@ function FieldMapPanel({
 
       {MAPBOX_ACCESS_TOKEN ? (
         <div className="map-shell">
-          {!(status === 'ready' && mode === 'overview') ? (
+          {status === 'error' ? (
             <div className="map-status-row">
-              <span className={`status-pill status-${status}`}>
-                {status === 'loading' && 'Loading map'}
-                {status === 'ready' && 'Map ready'}
-                {status === 'error' && 'Map error'}
-              </span>
               <span className="map-meta" aria-live="polite">
-                {status === 'loading' && 'Connecting to Mapbox...'}
-                {status === 'ready' &&
-                  (isEditingField
-                    ? 'Adjust the field details and save when ready.'
-                    : 'Draw the field boundary and confirm it.')}
-                {status === 'error' && errorMessage}
+                {errorMessage}
               </span>
             </div>
           ) : null}
@@ -2863,18 +2852,12 @@ export default function App() {
               )}
             </section>
           ) : (
-            <section className="content-card route-card" aria-labelledby="field-route-title">
+            <section className="route-card" aria-labelledby="field-route-title">
               <header className="content-header route-header">
                 <div>
-                  <p className="eyebrow">Field setup</p>
                   <h2 id="field-route-title">
                     {activeScreen === 'edit-field' ? 'Edit field' : 'Add field'}
                   </h2>
-                  <p className="route-copy">
-                    {activeScreen === 'edit-field'
-                      ? `Update the saved field for ${currentFarmerName || 'this farmer'}.`
-                      : `Draw and save a field for ${currentFarmerName || 'this farmer'} on a separate screen.`}
-                  </p>
                 </div>
                 <button type="button" className="btn btn-secondary" onClick={handleCloseFieldScreen}>
                   Back to fields

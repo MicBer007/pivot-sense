@@ -542,6 +542,7 @@ p {
 }
 
 .route-card {
+  margin-top: 1rem;
   min-height: 32rem;
 }
 
@@ -699,8 +700,16 @@ p {
 
 .field-action-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.field-action-row .btn {
+  padding: 0.55rem 0.75rem;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .field-meta-banner {
@@ -874,10 +883,6 @@ code {
   .field-panel-header {
     flex-direction: column;
     align-items: start;
-  }
-
-  .route-header {
-    flex-direction: column;
   }
 
   .map-draw-controls {
