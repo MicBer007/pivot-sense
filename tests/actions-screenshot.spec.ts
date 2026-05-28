@@ -67,6 +67,9 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click();
   await expect(page).toHaveURL(/\/actions$/);
+  await expect(page.getByRole('heading', { name: 'Actions', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Log new action', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log a pivot action' })).toBeVisible();
 
   const mapCanvas = page.getByTestId('actions-map-canvas');
@@ -75,12 +78,12 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
   const mapBox = await mapCanvas.boundingBox();
   if (!mapBox) throw new Error('Actions map canvas is not visible.');
   await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
   await page.waitForTimeout(1_200);
-  await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
 
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.getByLabel('Millimetres at pivot').fill('20');
+  await expect(page.getByText('East Pivot', { exact: false })).toBeVisible();
 
   const dir = resolve('screenshots');
   mkdirSync(dir, { recursive: true });
@@ -90,7 +93,10 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
   });
 
   await page.getByRole('button', { name: 'Log action', exact: true }).click();
-  await expect(page.getByText(/Logged 0\.00 mm across East Pivot\./)).toBeVisible({
+
+  // Logging returns to the list, where the new action now appears.
+  await expect(page.getByRole('heading', { name: 'Actions', exact: true })).toBeVisible({
     timeout: 10_000,
   });
+  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
 });
