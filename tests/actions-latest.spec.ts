@@ -67,6 +67,9 @@ test('actions page latest screenshot', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Actions', exact: true }).click();
   await expect(page).toHaveURL(/\/actions$/);
+  await expect(page.getByRole('heading', { name: 'Actions', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Log new action', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log a pivot action' })).toBeVisible();
 
   const mapCanvas = page.getByTestId('actions-map-canvas');
@@ -75,9 +78,10 @@ test('actions page latest screenshot', async ({ page }) => {
   const mapBox = await mapCanvas.boundingBox();
   if (!mapBox) throw new Error('Actions map canvas is not visible.');
   await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.waitForTimeout(1_200);
 
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.getByLabel('Millimetres at pivot').fill('20');
 
   const dir = resolve('screenshots');

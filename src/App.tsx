@@ -74,6 +74,17 @@ type WaterPerDayRow = {
   fieldName: string;
   totalMm: number;
 };
+type ActionRecord = {
+  id: string;
+  fieldId: string;
+  fieldName: string;
+  endDate: string;
+  movementDegrees: number;
+  mmAppliedAtPivot: number;
+  startPivotAngleDegrees: number;
+  sweepDirection: PivotSweepDirection;
+  createdAt: string;
+};
 type RecentAction = {
   fieldId: string;
   movementDegrees: number;
@@ -425,6 +436,58 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
       fieldName: row.fields?.field_name ?? 'Unknown field',
       totalMm: Number(row.mm_applied_at_pivot ?? 0),
     })),
+    error: null as string | null,
+  };
+}
+
+async function fetchActionsForFarmer(currentFarmerId: string) {
+  if (!supabase || !currentFarmerId) {
+    return {
+      data: [] as ActionRecord[],
+      error: null as string | null,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('actions')
+    .select(
+      'id, end_date, movement_degrees, mm_applied_at_pivot, start_pivot_angle_degrees, sweep_direction, created_at, field_id, fields!inner(id, field_name, farmer_id)',
+    )
+    .eq('fields.farmer_id', currentFarmerId)
+    .order('end_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    return {
+      data: [] as ActionRecord[],
+      error: error.message,
+    };
+  }
+
+  type ActionRow = {
+    id: string;
+    end_date: string;
+    movement_degrees: number | string | null;
+    mm_applied_at_pivot: number | string | null;
+    start_pivot_angle_degrees: number | string | null;
+    sweep_direction: number | string | null;
+    created_at: string;
+    field_id: string;
+    fields: { id: string; field_name: string; farmer_id: string } | null;
+  };
+
+  return {
+    data: ((data ?? []) as unknown as ActionRow[]).map((row) => ({
+      id: row.id,
+      fieldId: row.field_id,
+      fieldName: row.fields?.field_name ?? 'Unknown field',
+      endDate: row.end_date,
+      movementDegrees: Number(row.movement_degrees ?? 0),
+      mmAppliedAtPivot: Number(row.mm_applied_at_pivot ?? 0),
+      startPivotAngleDegrees: normalizeAngleDegrees(Number(row.start_pivot_angle_degrees ?? 0)),
+      sweepDirection: Number(row.sweep_direction ?? 1) < 0 ? -1 : 1,
+      createdAt: row.created_at,
+    })) satisfies ActionRecord[],
     error: null as string | null,
   };
 }
@@ -2255,6 +2318,20 @@ function todayDateString() {
   return `${year}-${month}-${day}`;
 }
 
+function computeEffectiveMm(mmAppliedAtPivot: number, movementDegrees: number) {
+  return mmAppliedAtPivot * (movementDegrees / 360);
+}
+
+function formatActionDate(isoDate: string) {
+  const [year, month, day] = isoDate.split('-').map((part) => Number(part));
+  if (!year || !month || !day) return isoDate;
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 const PIVOT_DRAG_JITTER_DEGREES = 2;
 const PIVOT_DIRECTION_SWITCH_DEGREES = 12;
 
@@ -2278,7 +2355,15 @@ function computeAngleDistance(angleA: number, angleB: number) {
   return Math.abs(computeSignedAngleDelta(angleA, angleB));
 }
 
-function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
+function ActionLogView({
+  currentFarmerId,
+  onBack,
+  onLogged,
+}: {
+  currentFarmerId: string;
+  onBack: () => void;
+  onLogged: () => void;
+}) {
   const [fields, setFields] = useState<FieldRecord[]>([]);
   const [loadingFields, setLoadingFields] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -2305,7 +2390,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   const [mmAppliedRaw, setMmAppliedRaw] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [step, setStep] = useState<'select' | 'details'>('select');
 
   const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
   const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
@@ -2385,15 +2470,13 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   }, [selectedFieldId, selectedField?.pivotAngleDegrees]);
 
   useEffect(() => {
-    if (selectedFieldId && pivotFields.some((field) => field.id === selectedFieldId)) {
-      return;
+    if (selectedFieldId && !pivotFields.some((field) => field.id === selectedFieldId)) {
+      setSelectedFieldId('');
     }
-
-    setSelectedFieldId(pivotFields[0]?.id ?? '');
   }, [pivotFields, selectedFieldId]);
 
   useEffect(() => {
-    if (loadingFields || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
+    if (loadingFields || step !== 'select' || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
       return;
     }
 
@@ -2459,7 +2542,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       mapInstanceRef.current?.remove();
       mapInstanceRef.current = null;
     };
-  }, [loadingFields]);
+  }, [loadingFields, step]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -2620,7 +2703,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       if (typeof clickedFieldId === 'string') {
         setSelectedFieldId(clickedFieldId);
         setSaveError(null);
-        setSaveMessage(null);
       }
     }
 
@@ -2724,7 +2806,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
     setSaving(true);
     setSaveError(null);
-    setSaveMessage(null);
 
     const { error } = await supabase.rpc('log_action', {
       input_farmer_id: currentFarmerId,
@@ -2733,6 +2814,8 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       input_movement_degrees: movementDegrees,
       input_mm_applied_at_pivot: mmAppliedNumber,
       input_new_pivot_angle_degrees: normalizeAngleDegrees(newAngle),
+      input_start_pivot_angle_degrees: normalizeAngleDegrees(startAngle),
+      input_sweep_direction: sweepDirection,
     });
 
     setSaving(false);
@@ -2742,17 +2825,19 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       return;
     }
 
-    setSaveMessage(
-      `Logged ${effectiveMm.toFixed(2)} mm across ${selectedField.fieldName}.`,
-    );
     setMmAppliedRaw('');
-    await loadPivotFields(false);
+    onLogged();
   }
 
   if (!loadingFields && pivotFields.length === 0) {
     return (
       <section className="actions-panel" aria-labelledby="actions-title">
-        <h2 id="actions-title">Log a pivot action</h2>
+        <header className="actions-header actions-subview-header">
+          <h2 id="actions-title">Log a pivot action</h2>
+          <button type="button" className="btn btn-secondary" onClick={onBack}>
+            Back
+          </button>
+        </header>
         <div className="map-state-card">
           <h3>No pivot fields</h3>
           <p>
@@ -2766,12 +2851,24 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
   return (
     <section className="actions-panel" aria-labelledby="actions-title">
-      <header className="actions-header">
-        <h2 id="actions-title">Log a pivot action</h2>
-        <p>
-          Pick a pivot, drag it to where it stopped, and enter the millimetres
-          the pivot put down at full output.
-        </p>
+      <header className="actions-header actions-subview-header">
+        <div>
+          <h2 id="actions-title">Log a pivot action</h2>
+          <p>
+            {step === 'select'
+              ? selectedField
+                ? 'Drag the pivot to where it stopped.'
+                : 'Tap a pivot on the map to get started.'
+              : 'Enter how much water the pivot put down, and set the date.'}
+          </p>
+          <span className="actions-steps" aria-hidden>
+            <span className={`actions-step-dot${step === 'select' ? ' is-active' : ''}`} />
+            <span className={`actions-step-dot${step === 'details' ? ' is-active' : ''}`} />
+          </span>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={onBack}>
+          Back
+        </button>
       </header>
 
       {loadingFields ? (
@@ -2787,7 +2884,7 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </p>
       ) : null}
 
-      {!loadingFields && !MAPBOX_ACCESS_TOKEN ? (
+      {!loadingFields && step === 'select' && !MAPBOX_ACCESS_TOKEN ? (
         <div className="map-state-card" data-testid="maps-setup-needed">
           <h3>Mapbox setup needed</h3>
           <p>
@@ -2797,72 +2894,88 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </div>
       ) : null}
 
-      {!loadingFields ? (
-        <div className="field-name-card">
-          <label className="auth-label" htmlFor="actions-end-date">
-            Action date
-          </label>
-          <input
-            id="actions-end-date"
-            className="auth-input"
-            type="date"
-            value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-          />
-        </div>
-      ) : null}
+      {!loadingFields && step === 'select' ? (
+        <>
+          {MAPBOX_ACCESS_TOKEN ? (
+            <div className="map-stage actions-map-stage">
+              <div
+                id={mapId}
+                ref={mapRef}
+                className="map-canvas actions-map-canvas"
+                data-testid="actions-map-canvas"
+              />
+            </div>
+          ) : null}
 
-      {!loadingFields && MAPBOX_ACCESS_TOKEN ? (
-        <div className="map-stage actions-map-stage">
-          <div
-            id={mapId}
-            ref={mapRef}
-            className="map-canvas actions-map-canvas"
-            data-testid="actions-map-canvas"
-          />
-        </div>
-      ) : null}
-
-      {!loadingFields && selectedField ? (
-        <div className="actions-form">
-          <label className="auth-label" htmlFor="actions-mm">
-            Millimetres at pivot
-          </label>
-          <input
-            id="actions-mm"
-            className="auth-input"
-            type="number"
-            min={0}
-            step="0.1"
-            placeholder="e.g. 20"
-            value={mmAppliedRaw}
-            onChange={(event) => setMmAppliedRaw(event.target.value)}
-          />
-
-          <div className="actions-effective-readout">
-            <span>Spread across field:</span>
-            <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
+          <div className="field-action-bar">
+            <button
+              type="button"
+              className="btn btn-primary field-add-btn"
+              onClick={() => setStep('details')}
+              disabled={!selectedField}
+            >
+              Next
+            </button>
           </div>
-        </div>
+        </>
       ) : null}
 
-      {!loadingFields && selectedField ? (
-        <div className="field-action-bar">
-          <button
-            type="button"
-            className="btn btn-primary field-add-btn"
-            onClick={() => void handleSave()}
-            disabled={saving || !mmAppliedValid}
-          >
-            {saving ? 'Saving action...' : 'Log action'}
-          </button>
-        </div>
-      ) : null}
+      {!loadingFields && step === 'details' && selectedField ? (
+        <>
+          <div className="actions-form">
+            <label className="auth-label" htmlFor="actions-mm">
+              Millimetres at pivot
+            </label>
+            <input
+              id="actions-mm"
+              className="auth-input"
+              type="number"
+              min={0}
+              step="0.1"
+              placeholder="e.g. 20"
+              value={mmAppliedRaw}
+              onChange={(event) => setMmAppliedRaw(event.target.value)}
+              autoFocus
+            />
 
-      {saveMessage ? (
-        <p className="auth-feedback auth-feedback-success" aria-live="polite">
-          {saveMessage}
-        </p>
+            <div className="actions-effective-readout">
+              <span>Spread across {selectedField.fieldName}:</span>
+              <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
+            </div>
+
+            <div className="actions-date-row">
+              <label className="auth-label" htmlFor="actions-end-date">
+                Date
+              </label>
+              <input
+                id="actions-end-date"
+                className="auth-input"
+                type="date"
+                value={endDate}
+                onChange={(event) => setEndDate(event.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="field-action-bar actions-details-bar">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setStep('select')}
+              disabled={saving}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary field-add-btn"
+              onClick={() => void handleSave()}
+              disabled={saving || !mmAppliedValid}
+            >
+              {saving ? 'Saving action...' : 'Log action'}
+            </button>
+          </div>
+        </>
       ) : null}
 
       {saveError ? (
@@ -2871,6 +2984,346 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </p>
       ) : null}
     </section>
+  );
+}
+
+function ActionsListView({
+  currentFarmerId,
+  onNew,
+  onSelect,
+}: {
+  currentFarmerId: string;
+  onNew: () => void;
+  onSelect: (action: ActionRecord) => void;
+}) {
+  const [actions, setActions] = useState<ActionRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setLoadError(null);
+      const result = await fetchActionsForFarmer(currentFarmerId);
+      if (cancelled) return;
+      setActions(result.data);
+      if (result.error) {
+        setLoadError(result.error);
+      }
+      setLoading(false);
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFarmerId]);
+
+  return (
+    <section className="actions-panel" aria-labelledby="actions-title">
+      <header className="actions-header">
+        <h2 id="actions-title">Actions</h2>
+        <p>Every irrigation action logged for this farmer, newest first.</p>
+      </header>
+
+      <button type="button" className="btn btn-primary actions-new-btn" onClick={onNew}>
+        <span className="field-add-btn-glyph" aria-hidden>
+          +
+        </span>
+        Log new action
+      </button>
+
+      {loadError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {loadError}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="map-state-card">
+          <h3>Loading actions</h3>
+          <p>Fetching the action history for this farmer.</p>
+        </div>
+      ) : actions.length === 0 ? (
+        <div className="map-state-card">
+          <h3>No actions yet</h3>
+          <p>Log your first pivot action with the green button above.</p>
+        </div>
+      ) : (
+        <ul className="actions-list">
+          {actions.map((action) => (
+            <li key={action.id}>
+              <button
+                type="button"
+                className="actions-list-item"
+                onClick={() => onSelect(action)}
+              >
+                <span className="actions-list-main">
+                  <span className="actions-list-field">{action.fieldName}</span>
+                  <span className="actions-list-date">{formatActionDate(action.endDate)}</span>
+                </span>
+                <span className="actions-list-mm">
+                  {computeEffectiveMm(action.mmAppliedAtPivot, action.movementDegrees).toFixed(1)} mm
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ActionDetailView({
+  currentFarmerId,
+  action,
+  onBack,
+}: {
+  currentFarmerId: string;
+  action: ActionRecord;
+  onBack: () => void;
+}) {
+  const mapId = useId();
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const [field, setField] = useState<FieldRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [mapStatus, setMapStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
+  );
+
+  const effectiveMm = computeEffectiveMm(action.mmAppliedAtPivot, action.movementDegrees);
+  const circle = field?.fieldType === 'pivot' ? deriveCircleFromPolygon(field.boundary) : null;
+  const startAngle = action.startPivotAngleDegrees;
+  const endAngle = normalizeAngleDegrees(
+    startAngle + action.sweepDirection * action.movementDegrees,
+  );
+  const startPivotEntry =
+    circle && field
+      ? [
+          {
+            id: field.id,
+            center: circle.center,
+            radiusMeters: circle.radiusMeters,
+            pivotAngleDegrees: startAngle,
+          },
+        ]
+      : [];
+  const endPivotEntry =
+    circle && field
+      ? [
+          {
+            id: field.id,
+            center: circle.center,
+            radiusMeters: circle.radiusMeters,
+            pivotAngleDegrees: endAngle,
+          },
+        ]
+      : [];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setLoadError(null);
+      const result = await fetchFieldsForFarmer(currentFarmerId);
+      if (cancelled) return;
+      setField(result.data.find((item) => item.id === action.fieldId) ?? null);
+      if (result.error) {
+        setLoadError(result.error);
+      }
+      setLoading(false);
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFarmerId, action.fieldId]);
+
+  useEffect(() => {
+    if (loading || !MAPBOX_ACCESS_TOKEN || !mapRef.current || !field) {
+      return;
+    }
+
+    mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
+
+    let cancelled = false;
+    setMapStatus('loading');
+    const initialBounds = getPolygonsBounds([field.boundary]);
+
+    try {
+      const map = new mapboxgl.Map({
+        container: mapRef.current,
+        style: MAPBOX_STYLE_URL,
+        ...(initialBounds
+          ? {
+              bounds: initialBounds,
+              fitBoundsOptions: { padding: 72, maxZoom: 15, duration: 0 },
+            }
+          : {
+              center: DEFAULT_CENTER,
+              zoom: DEFAULT_ZOOM,
+            }),
+        attributionControl: true,
+      });
+
+      mapInstanceRef.current = map;
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+      function markReady() {
+        if (cancelled) return;
+        ensureActionMapSourcesAndLayers(map);
+        setMapStatus('ready');
+      }
+
+      map.on('load', markReady);
+      map.on('style.load', markReady);
+      map.on('error', (event) => {
+        if (cancelled) return;
+        if (isSilentMapboxResourceError(event)) return;
+        setMapStatus('error');
+      });
+    } catch {
+      setMapStatus('error');
+    }
+
+    return () => {
+      cancelled = true;
+      mapInstanceRef.current?.remove();
+      mapInstanceRef.current = null;
+    };
+  }, [loading, field]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || mapStatus !== 'ready' || !field) return;
+
+    setGeoJsonSourceData(map, ACTION_FIELDS_SOURCE_ID, emptyFeatureCollection());
+    setGeoJsonSourceData(map, ACTION_SELECTED_FIELD_SOURCE_ID, buildFieldSelectionGeoJson([field]));
+    setGeoJsonSourceData(
+      map,
+      ACTION_SWEEP_SOURCE_ID,
+      buildPivotSweepGeoJson(
+        circle?.center ?? null,
+        circle?.radiusMeters ?? null,
+        startAngle,
+        action.movementDegrees,
+        action.sweepDirection,
+      ),
+    );
+    setGeoJsonSourceData(map, ACTION_START_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(startPivotEntry));
+    setGeoJsonSourceData(map, ACTION_END_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(endPivotEntry));
+
+    const bounds = getPolygonsBounds([field.boundary]);
+    if (bounds) {
+      map.fitBounds(bounds, { padding: 72, maxZoom: 15, duration: 0 });
+    }
+  }, [
+    mapStatus,
+    field,
+    circle,
+    startAngle,
+    endAngle,
+    action.movementDegrees,
+    action.sweepDirection,
+  ]);
+
+  return (
+    <section className="actions-panel" aria-labelledby="actions-detail-title">
+      <header className="actions-header actions-subview-header">
+        <h2 id="actions-detail-title">{action.fieldName}</h2>
+        <button type="button" className="btn btn-secondary" onClick={onBack}>
+          Back
+        </button>
+      </header>
+
+      {loadError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {loadError}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="map-state-card">
+          <h3>Loading action</h3>
+          <p>Fetching the field for this action.</p>
+        </div>
+      ) : !field ? (
+        <div className="map-state-card">
+          <h3>Field unavailable</h3>
+          <p>The field for this action could not be found.</p>
+        </div>
+      ) : !MAPBOX_ACCESS_TOKEN ? (
+        <div className="map-state-card" data-testid="maps-setup-needed">
+          <h3>Mapbox setup needed</h3>
+          <p>
+            Add <code>VITE_MAPBOX_ACCESS_TOKEN</code> to your local Vite env to see the
+            field map.
+          </p>
+        </div>
+      ) : (
+        <div className="map-stage actions-map-stage">
+          <div
+            id={mapId}
+            ref={mapRef}
+            className="map-canvas actions-map-canvas"
+            data-testid="action-detail-map-canvas"
+          />
+        </div>
+      )}
+
+      <dl className="action-detail-grid">
+        <div>
+          <dt>Water placed</dt>
+          <dd>{effectiveMm.toFixed(1)} mm</dd>
+        </div>
+        <div>
+          <dt>Date</dt>
+          <dd>{formatActionDate(action.endDate)}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
+  const [view, setView] = useState<'list' | 'log' | 'detail'>('list');
+  const [detailAction, setDetailAction] = useState<ActionRecord | null>(null);
+
+  if (view === 'log') {
+    return (
+      <ActionLogView
+        currentFarmerId={currentFarmerId}
+        onBack={() => setView('list')}
+        onLogged={() => setView('list')}
+      />
+    );
+  }
+
+  if (view === 'detail' && detailAction) {
+    return (
+      <ActionDetailView
+        currentFarmerId={currentFarmerId}
+        action={detailAction}
+        onBack={() => setView('list')}
+      />
+    );
+  }
+
+  return (
+    <ActionsListView
+      currentFarmerId={currentFarmerId}
+      onNew={() => setView('log')}
+      onSelect={(action) => {
+        setDetailAction(action);
+        setView('detail');
+      }}
+    />
   );
 }
 
