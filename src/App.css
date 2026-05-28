@@ -1107,22 +1107,6 @@ code {
   gap: 0.5rem;
 }
 
-.actions-effective-readout {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.7rem 0.95rem;
-  border-radius: var(--radius);
-  background: var(--green-soft);
-  color: var(--green-dark);
-  border: 1px solid rgba(94, 149, 68, 0.28);
-}
-
-.actions-effective-readout strong {
-  font-size: 1.1rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .actions-subview-header {
   display: flex;
   align-items: flex-start;

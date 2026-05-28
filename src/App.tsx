@@ -14,11 +14,12 @@ import { supabase, supabaseConfigured } from './supabase';
 
 type TabId = 'insights' | 'fields' | 'actions';
 type AppState = 'loading' | 'signed-out' | 'signed-in';
-type AppScreen = 'workspace' | 'add-field' | 'edit-field';
+type AppScreen = 'workspace' | 'add-field' | 'edit-field' | 'log-action' | 'view-action';
 type AppRoute = {
   tabId: TabId;
   screen: AppScreen;
   fieldId?: string | null;
+  actionId?: string | null;
 };
 type DrawMode = 'circle' | 'free';
 type Coordinate = [number, number];
@@ -144,6 +145,8 @@ const TAB_ROOT_PATHS: Record<TabId, string> = {
 };
 const ADD_FIELD_PATH = '/fields/add';
 const EDIT_FIELD_PATH_PREFIX = '/fields/';
+const LOG_ACTION_PATH = '/actions/log';
+const ACTION_DETAIL_PATH_PREFIX = '/actions/';
 
 function readStoredFarmer() {
   if (typeof window === 'undefined') return null;
@@ -198,6 +201,20 @@ function readAppRouteFromLocation(): AppRoute {
     }
   }
 
+  if (pathname === LOG_ACTION_PATH) {
+    return { tabId: 'actions', screen: 'log-action' };
+  }
+  if (pathname.startsWith(ACTION_DETAIL_PATH_PREFIX)) {
+    const actionId = pathname.slice(ACTION_DETAIL_PATH_PREFIX.length);
+    if (actionId) {
+      return {
+        tabId: 'actions',
+        screen: 'view-action',
+        actionId: decodeURIComponent(actionId),
+      };
+    }
+  }
+
   switch (pathname) {
     case '/':
     case '/fields':
@@ -220,6 +237,14 @@ function buildRoutePath(route: AppRoute) {
 
   if (route.screen === 'edit-field' && route.fieldId) {
     return `${EDIT_FIELD_PATH_PREFIX}${encodeURIComponent(route.fieldId)}`;
+  }
+
+  if (route.screen === 'log-action') {
+    return LOG_ACTION_PATH;
+  }
+
+  if (route.screen === 'view-action' && route.actionId) {
+    return `${ACTION_DETAIL_PATH_PREFIX}${encodeURIComponent(route.actionId)}`;
   }
 
   return TAB_ROOT_PATHS[route.tabId];
@@ -390,6 +415,35 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
   };
 }
 
+const ACTION_SELECT_COLUMNS =
+  'id, end_date, movement_degrees, mm_applied_at_pivot, start_pivot_angle_degrees, sweep_direction, created_at, field_id, fields!inner(id, field_name, farmer_id)';
+
+type ActionRow = {
+  id: string;
+  end_date: string;
+  movement_degrees: number | string | null;
+  mm_applied_at_pivot: number | string | null;
+  start_pivot_angle_degrees: number | string | null;
+  sweep_direction: number | string | null;
+  created_at: string;
+  field_id: string;
+  fields: { id: string; field_name: string; farmer_id: string } | null;
+};
+
+function mapActionRow(row: ActionRow): ActionRecord {
+  return {
+    id: row.id,
+    fieldId: row.field_id,
+    fieldName: row.fields?.field_name ?? 'Unknown field',
+    endDate: row.end_date,
+    movementDegrees: Number(row.movement_degrees ?? 0),
+    mmAppliedAtPivot: Number(row.mm_applied_at_pivot ?? 0),
+    startPivotAngleDegrees: normalizeAngleDegrees(Number(row.start_pivot_angle_degrees ?? 0)),
+    sweepDirection: Number(row.sweep_direction ?? 1) < 0 ? -1 : 1,
+    createdAt: row.created_at,
+  };
+}
+
 async function fetchActionsForFarmer(currentFarmerId: string) {
   if (!supabase || !currentFarmerId) {
     return {
@@ -400,9 +454,7 @@ async function fetchActionsForFarmer(currentFarmerId: string) {
 
   const { data, error } = await supabase
     .from('actions')
-    .select(
-      'id, end_date, movement_degrees, mm_applied_at_pivot, start_pivot_angle_degrees, sweep_direction, created_at, field_id, fields!inner(id, field_name, farmer_id)',
-    )
+    .select(ACTION_SELECT_COLUMNS)
     .eq('fields.farmer_id', currentFarmerId)
     .order('end_date', { ascending: false })
     .order('created_at', { ascending: false });
@@ -414,30 +466,36 @@ async function fetchActionsForFarmer(currentFarmerId: string) {
     };
   }
 
-  type ActionRow = {
-    id: string;
-    end_date: string;
-    movement_degrees: number | string | null;
-    mm_applied_at_pivot: number | string | null;
-    start_pivot_angle_degrees: number | string | null;
-    sweep_direction: number | string | null;
-    created_at: string;
-    field_id: string;
-    fields: { id: string; field_name: string; farmer_id: string } | null;
+  return {
+    data: ((data ?? []) as unknown as ActionRow[]).map(mapActionRow),
+    error: null as string | null,
   };
+}
+
+async function fetchActionById(currentFarmerId: string, actionId: string) {
+  if (!supabase || !currentFarmerId || !actionId) {
+    return {
+      data: null as ActionRecord | null,
+      error: null as string | null,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('actions')
+    .select(ACTION_SELECT_COLUMNS)
+    .eq('id', actionId)
+    .eq('fields.farmer_id', currentFarmerId)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      data: null as ActionRecord | null,
+      error: error.message,
+    };
+  }
 
   return {
-    data: ((data ?? []) as unknown as ActionRow[]).map((row) => ({
-      id: row.id,
-      fieldId: row.field_id,
-      fieldName: row.fields?.field_name ?? 'Unknown field',
-      endDate: row.end_date,
-      movementDegrees: Number(row.movement_degrees ?? 0),
-      mmAppliedAtPivot: Number(row.mm_applied_at_pivot ?? 0),
-      startPivotAngleDegrees: normalizeAngleDegrees(Number(row.start_pivot_angle_degrees ?? 0)),
-      sweepDirection: Number(row.sweep_direction ?? 1) < 0 ? -1 : 1,
-      createdAt: row.created_at,
-    })) satisfies ActionRecord[],
+    data: data ? mapActionRow(data as unknown as ActionRow) : null,
     error: null as string | null,
   };
 }
@@ -2183,10 +2241,8 @@ function ActionLogView({
   const startAngle = selectedField?.pivotAngleDegrees ?? 0;
   const movementDegrees = computeDirectionalMovement(startAngle, newAngle, dragSweepDirection);
   const sweepDirection = dragSweepDirection;
-  const movementPct = movementDegrees / 360;
   const mmAppliedNumber = Number(mmAppliedRaw);
   const mmAppliedValid = mmAppliedRaw.trim() !== '' && Number.isFinite(mmAppliedNumber) && mmAppliedNumber >= 0;
-  const effectiveMm = mmAppliedValid ? mmAppliedNumber * movementPct : 0;
   const selectedCircle =
     selectedField?.fieldType === 'pivot' ? deriveCircleFromPolygon(selectedField.boundary) : null;
   const endPivotHandle =
@@ -2724,11 +2780,6 @@ function ActionLogView({
               autoFocus
             />
 
-            <div className="actions-effective-readout">
-              <span>Spread across {selectedField.fieldName}:</span>
-              <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
-            </div>
-
             <div className="actions-date-row">
               <label className="auth-label" htmlFor="actions-end-date">
                 Date
@@ -2864,16 +2915,17 @@ function ActionsListView({
 
 function ActionDetailView({
   currentFarmerId,
-  action,
+  actionId,
   onBack,
 }: {
   currentFarmerId: string;
-  action: ActionRecord;
+  actionId: string;
   onBack: () => void;
 }) {
   const mapId = useId();
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const [action, setAction] = useState<ActionRecord | null>(null);
   const [field, setField] = useState<FieldRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -2881,14 +2933,16 @@ function ActionDetailView({
     MAPBOX_ACCESS_TOKEN ? 'loading' : 'idle',
   );
 
-  const effectiveMm = computeEffectiveMm(action.mmAppliedAtPivot, action.movementDegrees);
+  const effectiveMm = action
+    ? computeEffectiveMm(action.mmAppliedAtPivot, action.movementDegrees)
+    : 0;
   const circle = field?.fieldType === 'pivot' ? deriveCircleFromPolygon(field.boundary) : null;
-  const startAngle = action.startPivotAngleDegrees;
-  const endAngle = normalizeAngleDegrees(
-    startAngle + action.sweepDirection * action.movementDegrees,
-  );
+  const startAngle = action?.startPivotAngleDegrees ?? 0;
+  const endAngle = action
+    ? normalizeAngleDegrees(startAngle + action.sweepDirection * action.movementDegrees)
+    : 0;
   const startPivotEntry =
-    circle && field
+    circle && field && action
       ? [
           {
             id: field.id,
@@ -2899,7 +2953,7 @@ function ActionDetailView({
         ]
       : [];
   const endPivotEntry =
-    circle && field
+    circle && field && action
       ? [
           {
             id: field.id,
@@ -2916,9 +2970,21 @@ function ActionDetailView({
     async function load() {
       setLoading(true);
       setLoadError(null);
+      const actionResult = await fetchActionById(currentFarmerId, actionId);
+      if (cancelled) return;
+      setAction(actionResult.data);
+      if (actionResult.error) {
+        setLoadError(actionResult.error);
+        setLoading(false);
+        return;
+      }
+      if (!actionResult.data) {
+        setLoading(false);
+        return;
+      }
       const result = await fetchFieldsForFarmer(currentFarmerId);
       if (cancelled) return;
-      setField(result.data.find((item) => item.id === action.fieldId) ?? null);
+      setField(result.data.find((item) => item.id === actionResult.data!.fieldId) ?? null);
       if (result.error) {
         setLoadError(result.error);
       }
@@ -2929,7 +2995,7 @@ function ActionDetailView({
     return () => {
       cancelled = true;
     };
-  }, [currentFarmerId, action.fieldId]);
+  }, [currentFarmerId, actionId]);
 
   useEffect(() => {
     if (loading || !MAPBOX_ACCESS_TOKEN || !mapRef.current || !field) {
@@ -2987,7 +3053,7 @@ function ActionDetailView({
 
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || mapStatus !== 'ready' || !field) return;
+    if (!map || mapStatus !== 'ready' || !field || !action) return;
 
     setGeoJsonSourceData(map, ACTION_FIELDS_SOURCE_ID, emptyFeatureCollection());
     setGeoJsonSourceData(map, ACTION_SELECTED_FIELD_SOURCE_ID, buildFieldSelectionGeoJson([field]));
@@ -3015,14 +3081,13 @@ function ActionDetailView({
     circle,
     startAngle,
     endAngle,
-    action.movementDegrees,
-    action.sweepDirection,
+    action,
   ]);
 
   return (
     <section className="actions-panel" aria-labelledby="actions-detail-title">
       <header className="actions-header actions-subview-header">
-        <h2 id="actions-detail-title">{action.fieldName}</h2>
+        <h2 id="actions-detail-title">{action?.fieldName ?? 'Action'}</h2>
         <button type="button" className="btn btn-secondary" onClick={onBack}>
           Back
         </button>
@@ -3038,6 +3103,11 @@ function ActionDetailView({
         <div className="map-state-card">
           <h3>Loading action</h3>
           <p>Fetching the field for this action.</p>
+        </div>
+      ) : !action ? (
+        <div className="map-state-card">
+          <h3>Action unavailable</h3>
+          <p>This action could not be found.</p>
         </div>
       ) : !field ? (
         <div className="map-state-card">
@@ -3063,40 +3133,49 @@ function ActionDetailView({
         </div>
       )}
 
-      <dl className="action-detail-grid">
-        <div>
-          <dt>Water placed</dt>
-          <dd>{effectiveMm.toFixed(1)} mm</dd>
-        </div>
-        <div>
-          <dt>Date</dt>
-          <dd>{formatActionDate(action.endDate)}</dd>
-        </div>
-      </dl>
+      {action ? (
+        <dl className="action-detail-grid">
+          <div>
+            <dt>Water placed</dt>
+            <dd>{effectiveMm.toFixed(1)} mm</dd>
+          </div>
+          <div>
+            <dt>Date</dt>
+            <dd>{formatActionDate(action.endDate)}</dd>
+          </div>
+        </dl>
+      ) : null}
     </section>
   );
 }
 
-function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
-  const [view, setView] = useState<'list' | 'log' | 'detail'>('list');
-  const [detailAction, setDetailAction] = useState<ActionRecord | null>(null);
-
-  if (view === 'log') {
+function ActionsPanel({
+  currentFarmerId,
+  screen,
+  actionId,
+  onNavigate,
+}: {
+  currentFarmerId: string;
+  screen: AppScreen;
+  actionId: string | null;
+  onNavigate: (screen: AppScreen, actionId?: string | null) => void;
+}) {
+  if (screen === 'log-action') {
     return (
       <ActionLogView
         currentFarmerId={currentFarmerId}
-        onBack={() => setView('list')}
-        onLogged={() => setView('list')}
+        onBack={() => onNavigate('workspace')}
+        onLogged={() => onNavigate('workspace')}
       />
     );
   }
 
-  if (view === 'detail' && detailAction) {
+  if (screen === 'view-action' && actionId) {
     return (
       <ActionDetailView
         currentFarmerId={currentFarmerId}
-        action={detailAction}
-        onBack={() => setView('list')}
+        actionId={actionId}
+        onBack={() => onNavigate('workspace')}
       />
     );
   }
@@ -3104,11 +3183,8 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   return (
     <ActionsListView
       currentFarmerId={currentFarmerId}
-      onNew={() => setView('log')}
-      onSelect={(action) => {
-        setDetailAction(action);
-        setView('detail');
-      }}
+      onNew={() => onNavigate('log-action')}
+      onSelect={(action) => onNavigate('view-action', action.id)}
     />
   );
 }
@@ -3415,6 +3491,7 @@ export default function App() {
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const activeTab = route.tabId;
   const activeScreen = route.screen;
+  const isFieldRouteScreen = activeScreen === 'add-field' || activeScreen === 'edit-field';
 
   useEffect(() => {
     function handleLocationChange() {
@@ -3593,6 +3670,10 @@ export default function App() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
+  function handleActionsNavigate(screen: AppScreen, actionId?: string | null) {
+    navigateTo({ tabId: 'actions', screen, actionId: actionId ?? null });
+  }
+
   function handleFieldCreated() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
@@ -3721,7 +3802,7 @@ export default function App() {
 
       <main className="app-shell">
         <div className="container">
-          {activeScreen === 'workspace' ? (
+          {!isFieldRouteScreen ? (
             <section
               className={
                 activeTab === 'fields' || activeTab === 'actions' || activeTab === 'insights'
@@ -3740,7 +3821,12 @@ export default function App() {
                   />
                 </>
               ) : activeTab === 'actions' ? (
-                <ActionsPanel currentFarmerId={currentFarmerId} />
+                <ActionsPanel
+                  currentFarmerId={currentFarmerId}
+                  screen={activeScreen}
+                  actionId={route.actionId ?? null}
+                  onNavigate={handleActionsNavigate}
+                />
               ) : activeTab === 'insights' ? (
                 <InsightsPanel currentFarmerId={currentFarmerId} />
               ) : (
@@ -3776,7 +3862,7 @@ export default function App() {
 
       <nav className="bottom-nav" aria-label="Main tabs">
         {tabs.map((tab) => {
-          const isActive = activeScreen === 'workspace' && tab.id === activeTab;
+          const isActive = !isFieldRouteScreen && tab.id === activeTab;
           return (
             <button
               key={tab.id}

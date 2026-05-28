@@ -83,7 +83,6 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
   await page.getByRole('button', { name: 'Next', exact: true }).click();
   await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.getByLabel('Millimetres at pivot').fill('20');
-  await expect(page.getByText('East Pivot', { exact: false })).toBeVisible();
 
   const dir = resolve('screenshots');
   mkdirSync(dir, { recursive: true });
