@@ -86,6 +86,12 @@ type ActionRecord = {
   sweepDirection: PivotSweepDirection;
   createdAt: string;
 };
+type RecentAction = {
+  fieldId: string;
+  movementDegrees: number;
+  mmApplied: number;
+  createdAt: string;
+};
 type TabConfig = {
   id: TabId;
   label: string;
@@ -130,6 +136,8 @@ const SAVED_FIELDS_SOURCE_ID = 'saved-fields';
 const DRAFT_BOUNDARY_SOURCE_ID = 'draft-boundary';
 const DRAFT_POINTS_SOURCE_ID = 'draft-points';
 const SAVED_PIVOT_SOURCE_ID = 'saved-pivot';
+const SAVED_RECENT_ACTION_SOURCE_ID = 'saved-recent-action';
+const SAVED_FIELD_POINT_LABELS_SOURCE_ID = 'saved-field-point-labels';
 const DRAFT_PIVOT_SOURCE_ID = 'draft-pivot';
 const ACTION_FIELDS_SOURCE_ID = 'action-fields';
 const ACTION_SELECTED_FIELD_SOURCE_ID = 'action-selected-field';
@@ -369,6 +377,48 @@ async function fetchFieldsForFarmer(currentFarmerId: string) {
       .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field)),
     error: null as string | null,
   };
+}
+
+async function fetchMostRecentActionPerField(currentFarmerId: string) {
+  if (!supabase || !currentFarmerId) {
+    return {
+      data: new Map<string, RecentAction>(),
+      error: null as string | null,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('actions')
+    .select('field_id, movement_degrees, mm_applied_at_pivot, created_at, fields!inner(farmer_id)')
+    .eq('fields.farmer_id', currentFarmerId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    return {
+      data: new Map<string, RecentAction>(),
+      error: error.message,
+    };
+  }
+
+  type ActionRow = {
+    field_id: string;
+    movement_degrees: number | string;
+    mm_applied_at_pivot: number | string | null;
+    created_at: string;
+  };
+
+  const byField = new Map<string, RecentAction>();
+  for (const row of (data ?? []) as unknown as ActionRow[]) {
+    if (byField.has(row.field_id)) continue;
+    byField.set(row.field_id, {
+      fieldId: row.field_id,
+      movementDegrees: Number(row.movement_degrees),
+      mmApplied: Number(row.mm_applied_at_pivot ?? 0),
+      createdAt: row.created_at,
+    });
+  }
+
+  return { data: byField, error: null as string | null };
 }
 
 async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
@@ -664,23 +714,33 @@ function createCirclePolygon(center: Coordinate, radiusMeters: number, steps = 4
   };
 }
 
-function buildSavedFieldsGeoJson(fields: FieldRecord[]): FeatureCollection {
+function buildSavedFieldsGeoJson(
+  fields: FieldRecord[],
+  recentActionsByFieldId: Map<string, RecentAction> = new Map(),
+): FeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: fields.map((field) => ({
-      type: 'Feature',
-      properties: {
-        id: field.id,
-        fieldName: field.fieldName,
-        fieldType: formatFieldType(field.fieldType),
-        pivotAngleDegrees: formatPivotAngleDegrees(field.pivotAngleDegrees),
-        mapLabel:
-          field.fieldType === 'pivot' && field.pivotAngleDegrees !== null
-            ? `${field.fieldName} - Pivots - ${formatPivotAngleDegrees(field.pivotAngleDegrees)}`
-            : `${field.fieldName} - Normal`,
-      },
-      geometry: field.boundary,
-    })),
+    features: fields.map((field) => {
+      const recent = recentActionsByFieldId.get(field.id);
+      const mapLabel =
+        field.fieldType === 'pivot'
+          ? recent
+            ? ''
+            : field.fieldName
+          : `${field.fieldName} - Normal`;
+
+      return {
+        type: 'Feature',
+        properties: {
+          id: field.id,
+          fieldName: field.fieldName,
+          fieldType: formatFieldType(field.fieldType),
+          pivotAngleDegrees: formatPivotAngleDegrees(field.pivotAngleDegrees),
+          mapLabel,
+        },
+        geometry: field.boundary,
+      };
+    }),
   };
 }
 
@@ -750,6 +810,77 @@ function buildDraftPointsGeoJson(
         },
       })),
   };
+}
+
+function buildFieldPointLabelsGeoJson(
+  entries: Array<{
+    id: string;
+    center: Coordinate;
+    radiusMeters: number;
+    pivotAngleDegrees: number;
+    fieldName: string;
+  }>,
+  recentActionsByFieldId: Map<string, RecentAction>,
+): FeatureCollection {
+  const features: FeatureCollection['features'] = [];
+  for (const entry of entries) {
+    const action = recentActionsByFieldId.get(entry.id);
+    if (!action || action.movementDegrees <= 0) continue;
+
+    const movement = Math.min(360, action.movementDegrees);
+    const wedgeMidAngle = entry.pivotAngleDegrees - movement / 2;
+    const openMidAngle = entry.pivotAngleDegrees + (360 - movement) / 2;
+    const labelRadius = entry.radiusMeters * 0.55;
+
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: getCircleCoordinate(entry.center, labelRadius, wedgeMidAngle),
+      },
+      properties: {
+        id: entry.id,
+        text: `${action.mmApplied.toFixed(1)} mm`,
+      },
+    });
+
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: getCircleCoordinate(entry.center, labelRadius, openMidAngle),
+      },
+      properties: {
+        id: entry.id,
+        text: entry.fieldName,
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+function buildRecentActionWedgesGeoJson(
+  entries: Array<{
+    id: string;
+    center: Coordinate;
+    radiusMeters: number;
+    pivotAngleDegrees: number;
+  }>,
+  recentActionsByFieldId: Map<string, RecentAction>,
+): FeatureCollection {
+  const features: FeatureCollection['features'] = [];
+  for (const entry of entries) {
+    const action = recentActionsByFieldId.get(entry.id);
+    if (!action || action.movementDegrees <= 0) continue;
+
+    const movement = Math.min(360, action.movementDegrees);
+    const startAngle = entry.pivotAngleDegrees - movement;
+    const wedge = buildPivotSweepGeoJson(entry.center, entry.radiusMeters, startAngle, movement, 1);
+    for (const feature of wedge.features) {
+      features.push({ ...feature, properties: { id: entry.id } });
+    }
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 function buildPivotSweepGeoJson(
@@ -826,13 +957,25 @@ function ensureMapLayers(map: mapboxgl.Map) {
     });
   }
 
+  if (!map.getLayer('saved-recent-action-fill')) {
+    map.addLayer({
+      id: 'saved-recent-action-fill',
+      type: 'fill',
+      source: SAVED_RECENT_ACTION_SOURCE_ID,
+      paint: {
+        'fill-color': '#2f7fd1',
+        'fill-opacity': 0.6,
+      },
+    });
+  }
+
   if (!map.getLayer('saved-fields-line')) {
     map.addLayer({
       id: 'saved-fields-line',
       type: 'line',
       source: SAVED_FIELDS_SOURCE_ID,
       paint: {
-        'line-color': '#1f5d2b',
+        'line-color': '#ffffff',
         'line-width': 2,
       },
     });
@@ -850,9 +993,29 @@ function ensureMapLayers(map: mapboxgl.Map) {
         'text-offset': [0, 0],
       },
       paint: {
-        'text-color': '#16351e',
-        'text-halo-color': '#f7fbf7',
-        'text-halo-width': 1.2,
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0, 0, 0, 0.35)',
+        'text-halo-width': 1,
+      },
+    });
+  }
+
+  if (!map.getLayer('saved-field-point-labels')) {
+    map.addLayer({
+      id: 'saved-field-point-labels',
+      type: 'symbol',
+      source: SAVED_FIELD_POINT_LABELS_SOURCE_ID,
+      layout: {
+        'text-field': ['get', 'text'],
+        'text-size': 11,
+        'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: {
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0, 0, 0, 0.45)',
+        'text-halo-width': 1,
       },
     });
   }
@@ -864,7 +1027,7 @@ function ensureMapLayers(map: mapboxgl.Map) {
       source: SAVED_PIVOT_SOURCE_ID,
       filter: ['==', ['get', 'overlayRole'], 'arm'],
       paint: {
-        'line-color': '#14532d',
+        'line-color': '#ffffff',
         'line-width': 2.5,
       },
     });
@@ -878,8 +1041,8 @@ function ensureMapLayers(map: mapboxgl.Map) {
       filter: ['==', ['get', 'overlayRole'], 'handle'],
       paint: {
         'circle-radius': 5,
-        'circle-color': '#14532d',
-        'circle-stroke-color': '#f7fbf7',
+        'circle-color': '#0a5fb8',
+        'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 1.5,
       },
     });
@@ -963,6 +1126,8 @@ function ensureMapLayers(map: mapboxgl.Map) {
 
 function ensureFieldMapSourcesAndLayers(map: mapboxgl.Map) {
   ensureGeoJsonSource(map, SAVED_FIELDS_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, SAVED_RECENT_ACTION_SOURCE_ID, emptyFeatureCollection());
+  ensureGeoJsonSource(map, SAVED_FIELD_POINT_LABELS_SOURCE_ID, emptyFeatureCollection());
   ensureGeoJsonSource(map, SAVED_PIVOT_SOURCE_ID, emptyFeatureCollection());
   ensureGeoJsonSource(map, DRAFT_BOUNDARY_SOURCE_ID, emptyFeatureCollection());
   ensureGeoJsonSource(map, DRAFT_POINTS_SOURCE_ID, emptyFeatureCollection());
@@ -1342,6 +1507,9 @@ function FieldMapPanel({
   const [circleRadiusLocked, setCircleRadiusLocked] = useState(false);
   const [savingField, setSavingField] = useState(false);
   const [deletingField, setDeletingField] = useState(false);
+  const [recentActionsByFieldId, setRecentActionsByFieldId] = useState<Map<string, RecentAction>>(
+    () => new Map(),
+  );
   const isAddingField = mode === 'create';
   const isEditingField = mode === 'edit';
   const selectedField = isEditingField
@@ -1382,6 +1550,7 @@ function FieldMapPanel({
         center: circle.center,
         radiusMeters: circle.radiusMeters,
         pivotAngleDegrees: field.pivotAngleDegrees,
+        fieldName: field.fieldName,
       },
     ];
   });
@@ -1617,6 +1786,19 @@ function FieldMapPanel({
   }, [currentFarmerId]);
 
   useEffect(() => {
+    if (mode !== 'overview' || !currentFarmerId) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchMostRecentActionPerField(currentFarmerId);
+      if (cancelled) return;
+      setRecentActionsByFieldId(result.data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFarmerId, mode, fields]);
+
+  useEffect(() => {
     if (mode === 'create') {
       setFieldNameDraft('');
       resetDraftState('circle');
@@ -1707,8 +1889,22 @@ function FieldMapPanel({
     const map = mapInstanceRef.current;
     if (!map || status !== 'ready') return;
 
-    setGeoJsonSourceData(map, SAVED_FIELDS_SOURCE_ID, buildSavedFieldsGeoJson(visibleFields));
+    setGeoJsonSourceData(
+      map,
+      SAVED_FIELDS_SOURCE_ID,
+      buildSavedFieldsGeoJson(visibleFields, recentActionsByFieldId),
+    );
     setGeoJsonSourceData(map, SAVED_PIVOT_SOURCE_ID, buildPivotOverlayGeoJson(savedPivotEntries));
+    setGeoJsonSourceData(
+      map,
+      SAVED_RECENT_ACTION_SOURCE_ID,
+      buildRecentActionWedgesGeoJson(savedPivotEntries, recentActionsByFieldId),
+    );
+    setGeoJsonSourceData(
+      map,
+      SAVED_FIELD_POINT_LABELS_SOURCE_ID,
+      buildFieldPointLabelsGeoJson(savedPivotEntries, recentActionsByFieldId),
+    );
     setGeoJsonSourceData(map, DRAFT_BOUNDARY_SOURCE_ID, buildDraftBoundaryGeoJson(draftPolygon));
     setGeoJsonSourceData(
       map,
@@ -1720,6 +1916,7 @@ function FieldMapPanel({
     status,
     visibleFields,
     savedPivotEntries,
+    recentActionsByFieldId,
     draftPolygon,
     drawMode,
     freePoints,
@@ -2030,27 +2227,27 @@ function FieldMapPanel({
             </div>
           ) : null}
           {isAddingField ? (
-            <div className="map-draw-controls" role="tablist" aria-label="Boundary mode">
+            <div className="map-draw-section">
+              <div className="map-draw-controls" role="tablist" aria-label="Boundary mode">
               <button
                 type="button"
-                aria-label="Circle mode"
-                title="Circle mode"
+                title="Circle"
                 className={drawMode === 'circle' ? 'map-draw-button is-active' : 'map-draw-button'}
                 onClick={() => resetDraftState('circle')}
+                disabled={!fieldNameDraft.trim()}
               >
-                <span className="sr-only">Circle mode</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="12" cy="12" r="6.5" />
                 </svg>
+                <span className="map-draw-button-label">Circle</span>
               </button>
               <button
                 type="button"
-                aria-label="Free mode"
-                title="Free mode"
+                title="Custom shape"
                 className={drawMode === 'free' ? 'map-draw-button is-active' : 'map-draw-button'}
                 onClick={() => resetDraftState('free')}
+                disabled={!fieldNameDraft.trim()}
               >
-                <span className="sr-only">Free mode</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M5 16.5 9 8l5 6 5-7" />
                   <circle cx="5" cy="16.5" r="1.4" />
@@ -2058,16 +2255,31 @@ function FieldMapPanel({
                   <circle cx="14" cy="14" r="1.4" />
                   <circle cx="19" cy="7" r="1.4" />
                 </svg>
+                <span className="map-draw-button-label">Custom</span>
               </button>
+              </div>
             </div>
           ) : null}
-          <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
+          <div
+            className={
+              isAddingField
+                ? !fieldNameDraft.trim()
+                  ? 'map-stage is-drawing is-locked'
+                  : 'map-stage is-drawing'
+                : 'map-stage'
+            }
+          >
             <div
               id={mapId}
               ref={mapRef}
               className={mode === 'overview' ? 'map-canvas map-canvas-overview' : 'map-canvas'}
               data-testid="mapbox-canvas"
             />
+            {isAddingField && !fieldNameDraft.trim() ? (
+              <div className="map-stage-lock" aria-live="polite">
+                Enter a field name to start drawing.
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -2107,9 +2319,11 @@ function FieldMapPanel({
                 <p className="field-summary-meta">
                   {field.fieldType === 'pivot' ? (
                     <>
-                      Pivot angle:{' '}
+                      Recent action:{' '}
                       <em className="field-summary-angle">
-                        {formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}
+                        {recentActionsByFieldId.get(field.id)
+                          ? `${recentActionsByFieldId.get(field.id)!.mmApplied.toFixed(1)} mm`
+                          : 'None yet'}
                       </em>
                     </>
                   ) : (
@@ -3492,6 +3706,10 @@ export default function App() {
   const activeTab = route.tabId;
   const activeScreen = route.screen;
   const isFieldRouteScreen = activeScreen === 'add-field' || activeScreen === 'edit-field';
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [activeTab, activeScreen]);
 
   useEffect(() => {
     function handleLocationChange() {
