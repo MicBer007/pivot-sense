@@ -1050,6 +1050,11 @@ code {
   background: var(--paper);
 }
 
+.actions-date-row {
+  display: grid;
+  gap: 0.35rem;
+}
+
 .pivot-map-readout {
   display: flex;
   flex-direction: column;

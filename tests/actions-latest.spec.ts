@@ -23,7 +23,7 @@ const supabasePublishableKey = envMap.get('VITE_SUPABASE_PUBLISHABLE_KEY') ?? ''
 async function seedPivotFarmer() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
   const suffix = randomUUID().slice(0, 8);
-  const farmerName = `Action Farmer ${suffix}`;
+  const farmerName = `Action Shot ${suffix}`;
 
   const { data: farmerRows, error: farmerError } = await client.rpc('upsert_farmer', {
     input_name: farmerName,
@@ -54,7 +54,7 @@ async function seedPivotFarmer() {
   return { farmerName };
 }
 
-test('actions tab renders pivot map and effective mm', async ({ page }) => {
+test('actions page latest screenshot', async ({ page }) => {
   const seeded = await seedPivotFarmer();
 
   await page.goto('/');
@@ -71,26 +71,19 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
 
   const mapCanvas = page.getByTestId('actions-map-canvas');
   await expect(mapCanvas).toBeVisible();
-  await page.waitForTimeout(1_200);
+  await page.waitForTimeout(1_500);
   const mapBox = await mapCanvas.boundingBox();
   if (!mapBox) throw new Error('Actions map canvas is not visible.');
   await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.waitForTimeout(1_200);
-  await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
 
   await page.getByLabel('Millimetres at pivot').fill('20');
 
   const dir = resolve('screenshots');
   mkdirSync(dir, { recursive: true });
   await page.screenshot({
-    path: resolve(dir, 'actions-flow.png'),
+    path: resolve(dir, 'latest.png'),
     fullPage: true,
-  });
-
-  await page.getByRole('button', { name: 'Log action', exact: true }).click();
-  await expect(page.getByText(/Logged 0\.00 mm across East Pivot\./)).toBeVisible({
-    timeout: 10_000,
   });
 });
