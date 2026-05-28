@@ -2560,21 +2560,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </p>
       </header>
 
-      {!loadingFields ? (
-        <div className="actions-date-row">
-          <label className="auth-label" htmlFor="actions-end-date">
-            Action date
-          </label>
-          <input
-            id="actions-end-date"
-            className="auth-input"
-            type="date"
-            value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-          />
-        </div>
-      ) : null}
-
       {loadingFields ? (
         <div className="map-state-card">
           <h3>Loading fields</h3>
@@ -2624,52 +2609,52 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </div>
       ) : null}
 
-      {!loadingFields ? (
+      {!loadingFields && selectedField ? (
         <div className="actions-form">
-          {selectedField ? (
-            <>
-              <label className="auth-label" htmlFor="actions-mm">
-                Millimetres at pivot
-              </label>
-              <input
-                id="actions-mm"
-                className="auth-input"
-                type="number"
-                min={0}
-                step="0.1"
-                placeholder="e.g. 20"
-                value={mmAppliedRaw}
-                onChange={(event) => setMmAppliedRaw(event.target.value)}
-              />
+          <label className="auth-label" htmlFor="actions-mm">
+            Millimetres at pivot
+          </label>
+          <input
+            id="actions-mm"
+            className="auth-input"
+            type="number"
+            min={0}
+            step="0.1"
+            placeholder="e.g. 20"
+            value={mmAppliedRaw}
+            onChange={(event) => setMmAppliedRaw(event.target.value)}
+          />
 
-              <div className="actions-effective-readout">
-                <span>Spread across field:</span>
-                <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
-              </div>
-
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => void handleSave()}
-                disabled={saving || !mmAppliedValid}
-              >
-                {saving ? 'Saving action...' : 'Log action'}
-              </button>
-            </>
-          ) : null}
-
-          {saveMessage ? (
-            <p className="auth-feedback auth-feedback-success" aria-live="polite">
-              {saveMessage}
-            </p>
-          ) : null}
-
-          {saveError ? (
-            <p className="auth-feedback auth-feedback-error" aria-live="polite">
-              {saveError}
-            </p>
-          ) : null}
+          <div className="actions-effective-readout">
+            <span>Spread across field:</span>
+            <strong>{mmAppliedValid ? `${effectiveMm.toFixed(2)} mm` : '—'}</strong>
+          </div>
         </div>
+      ) : null}
+
+      {!loadingFields && selectedField ? (
+        <div className="field-action-bar">
+          <button
+            type="button"
+            className="btn btn-primary field-add-btn"
+            onClick={() => void handleSave()}
+            disabled={saving || !mmAppliedValid}
+          >
+            {saving ? 'Saving action...' : 'Log action'}
+          </button>
+        </div>
+      ) : null}
+
+      {saveMessage ? (
+        <p className="auth-feedback auth-feedback-success" aria-live="polite">
+          {saveMessage}
+        </p>
+      ) : null}
+
+      {saveError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {saveError}
+        </p>
       ) : null}
     </section>
   );
