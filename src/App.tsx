@@ -1,5 +1,14 @@
-import { FormEvent, useEffect, useId, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import './App.css';
 import { supabase, supabaseConfigured } from './supabase';
 
@@ -59,7 +68,12 @@ type StoredFarmer = {
   id: string;
   name: string;
 };
-
+type WaterPerDayRow = {
+  day: string;
+  fieldId: string;
+  fieldName: string;
+  totalMm: number;
+};
 type TabConfig = {
   id: TabId;
   label: string;
@@ -317,6 +331,50 @@ async function fetchFieldsForFarmer(currentFarmerId: string) {
     data: ((data ?? []) as RpcFieldRow[])
       .map(parseFieldRecord)
       .filter((field: FieldRecord | null): field is FieldRecord => Boolean(field)),
+    error: null as string | null,
+  };
+}
+
+async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
+  if (!supabase || !currentFarmerId) {
+    return {
+      data: [] as WaterPerDayRow[],
+      error: null as string | null,
+    };
+  }
+
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (days - 1));
+  const cutoffIso = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+
+  const { data, error } = await supabase
+    .from('actions')
+    .select('end_date, mm_applied_at_pivot, field_id, fields!inner(id, field_name, farmer_id)')
+    .eq('fields.farmer_id', currentFarmerId)
+    .gte('end_date', cutoffIso);
+
+  if (error) {
+    return {
+      data: [] as WaterPerDayRow[],
+      error: error.message,
+    };
+  }
+
+  type ActionRow = {
+    end_date: string;
+    mm_applied_at_pivot: number | string | null;
+    field_id: string;
+    fields: { id: string; field_name: string; farmer_id: string } | null;
+  };
+
+  return {
+    data: ((data ?? []) as unknown as ActionRow[]).map((row) => ({
+      day: row.end_date,
+      fieldId: row.field_id,
+      fieldName: row.fields?.field_name ?? 'Unknown field',
+      totalMm: Number(row.mm_applied_at_pivot ?? 0),
+    })),
     error: null as string | null,
   };
 }
@@ -1046,7 +1104,10 @@ function FieldEditorCard({
         <div className="field-creation-card">
           <div className="field-creation-grid">
             <p className="pivot-angle-readout">
-              Current pivot angle: <strong>{formatPivotAngleDegrees(pivotAngleDraft)}</strong>
+              Current pivot angle:{' '}
+              <strong className="pivot-angle-value">
+                {formatPivotAngleDegrees(pivotAngleDraft)}
+              </strong>
             </p>
           </div>
         </div>
@@ -1771,6 +1832,18 @@ function FieldMapPanel({
         </header>
       ) : null}
 
+      {mode !== 'overview' && fieldMessage ? (
+        <p className="auth-feedback auth-feedback-success" aria-live="polite">
+          {fieldMessage}
+        </p>
+      ) : null}
+
+      {mode !== 'overview' && fieldError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {fieldError}
+        </p>
+      ) : null}
+
       {mode !== 'overview' ? (
         <FieldNameInput
           fieldNameDraft={fieldNameDraft}
@@ -1815,6 +1888,38 @@ function FieldMapPanel({
               </span>
             </div>
           ) : null}
+          {isAddingField ? (
+            <div className="map-draw-controls" role="tablist" aria-label="Boundary mode">
+              <button
+                type="button"
+                aria-label="Circle mode"
+                title="Circle mode"
+                className={drawMode === 'circle' ? 'map-draw-button is-active' : 'map-draw-button'}
+                onClick={() => resetDraftState('circle')}
+              >
+                <span className="sr-only">Circle mode</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="6.5" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Free mode"
+                title="Free mode"
+                className={drawMode === 'free' ? 'map-draw-button is-active' : 'map-draw-button'}
+                onClick={() => resetDraftState('free')}
+              >
+                <span className="sr-only">Free mode</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 16.5 9 8l5 6 5-7" />
+                  <circle cx="5" cy="16.5" r="1.4" />
+                  <circle cx="9" cy="8" r="1.4" />
+                  <circle cx="14" cy="14" r="1.4" />
+                  <circle cx="19" cy="7" r="1.4" />
+                </svg>
+              </button>
+            </div>
+          ) : null}
           <div className={isAddingField ? 'map-stage is-drawing' : 'map-stage'}>
             <div
               id={mapId}
@@ -1822,38 +1927,6 @@ function FieldMapPanel({
               className={mode === 'overview' ? 'map-canvas map-canvas-overview' : 'map-canvas'}
               data-testid="mapbox-canvas"
             />
-            {isAddingField ? (
-              <div className="map-draw-controls" role="tablist" aria-label="Boundary mode">
-                <button
-                  type="button"
-                  aria-label="Circle mode"
-                  title="Circle mode"
-                  className={drawMode === 'circle' ? 'map-draw-button is-active' : 'map-draw-button'}
-                  onClick={() => resetDraftState('circle')}
-                >
-                  <span className="sr-only">Circle mode</span>
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="6.5" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  aria-label="Free mode"
-                  title="Free mode"
-                  className={drawMode === 'free' ? 'map-draw-button is-active' : 'map-draw-button'}
-                  onClick={() => resetDraftState('free')}
-                >
-                  <span className="sr-only">Free mode</span>
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M5 16.5 9 8l5 6 5-7" />
-                    <circle cx="5" cy="16.5" r="1.4" />
-                    <circle cx="9" cy="8" r="1.4" />
-                    <circle cx="14" cy="14" r="1.4" />
-                    <circle cx="19" cy="7" r="1.4" />
-                  </svg>
-                </button>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}
@@ -1876,12 +1949,7 @@ function FieldMapPanel({
 
       {!fieldsLoading && mode === 'overview' && fields.length > 0 ? (
         <div className="map-state-card">
-          <h3>{fields.length === 1 ? '1 field saved' : `${fields.length} fields saved`}</h3>
-          <p>
-            {fields.length === 1
-              ? `Click the map or edit ${fields[0].fieldName} below.`
-              : 'Click any field on the map or use the edit buttons below.'}
-          </p>
+          <h3>Your fields</h3>
           <div className="field-summary-list">
             {fields.map((field) => (
               <article key={field.id} className="field-summary-card">
@@ -1889,16 +1957,23 @@ function FieldMapPanel({
                   <strong>{field.fieldName}</strong>
                   <button
                     type="button"
-                    className="btn btn-secondary"
+                    className="btn btn-edit-field"
                     onClick={() => onEditField?.(field.id)}
                   >
                     Edit field
                   </button>
                 </div>
                 <p className="field-summary-meta">
-                  {field.fieldType === 'pivot'
-                    ? `Pivot angle: ${formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}`
-                    : 'No pivot position tracked for normal fields.'}
+                  {field.fieldType === 'pivot' ? (
+                    <>
+                      Pivot angle:{' '}
+                      <em className="field-summary-angle">
+                        {formatPivotAngleDegrees(field.pivotAngleDegrees) ?? 'Not set'}
+                      </em>
+                    </>
+                  ) : (
+                    'No pivot position tracked for normal fields.'
+                  )}
                 </p>
               </article>
             ))}
@@ -1923,13 +1998,13 @@ function FieldMapPanel({
         />
       ) : null}
 
-      {fieldMessage ? (
+      {mode === 'overview' && fieldMessage ? (
         <p className="auth-feedback auth-feedback-success" aria-live="polite">
           {fieldMessage}
         </p>
       ) : null}
 
-      {fieldError ? (
+      {mode === 'overview' && fieldError ? (
         <p className="auth-feedback auth-feedback-error" aria-live="polite">
           {fieldError}
         </p>
@@ -2486,6 +2561,21 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
         </div>
       ) : null}
 
+      {!loadingFields ? (
+        <div className="field-name-card">
+          <label className="auth-label" htmlFor="actions-end-date">
+            Action date
+          </label>
+          <input
+            id="actions-end-date"
+            className="auth-input"
+            type="date"
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
+        </div>
+      ) : null}
+
       {!loadingFields && MAPBOX_ACCESS_TOKEN ? (
         <div className="map-stage actions-map-stage">
           <div
@@ -2499,17 +2589,6 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
       {!loadingFields ? (
         <div className="actions-form">
-          <label className="auth-label" htmlFor="actions-end-date">
-            Action date
-          </label>
-          <input
-            id="actions-end-date"
-            className="auth-input"
-            type="date"
-            value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-          />
-
           {selectedField ? (
             <>
               <div className="pivot-map-readout">
@@ -2617,6 +2696,287 @@ function ActionsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   );
 }
 
+const INSIGHTS_RANGE_OPTIONS: Array<{ days: number; label: string }> = [
+  { days: 7, label: '7 days' },
+  { days: 14, label: '14 days' },
+  { days: 30, label: '30 days' },
+];
+const INSIGHTS_MAX_WINDOW_DAYS = INSIGHTS_RANGE_OPTIONS.reduce(
+  (max, option) => Math.max(max, option.days),
+  0,
+);
+const INSIGHTS_FIELD_COLORS = [
+  '#5e9544',
+  '#c39a40',
+  '#9a7a3c',
+  '#c46a4a',
+  '#3a6a3f',
+];
+
+function formatInsightsDay(isoDate: string) {
+  const [year, month, day] = isoDate.split('-').map((part) => Number(part));
+  if (!year || !month || !day) return isoDate;
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function buildInsightsChartData(rows: WaterPerDayRow[], days: number) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const totalsByDay = new Map<string, number>();
+  for (const row of rows) {
+    totalsByDay.set(row.day, (totalsByDay.get(row.day) ?? 0) + row.totalMm);
+  }
+
+  const series: Array<{ day: string; fullDate: string; totalMm: number }> = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - offset);
+    const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+    series.push({
+      day: formatInsightsDay(iso),
+      fullDate: iso,
+      totalMm: totalsByDay.get(iso) ?? 0,
+    });
+  }
+
+  return { series };
+}
+
+function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
+  const [rows, setRows] = useState<WaterPerDayRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setLoadError(null);
+      const result = await fetchWaterPerDayForFarmer(
+        currentFarmerId,
+        INSIGHTS_MAX_WINDOW_DAYS,
+      );
+      if (cancelled) return;
+      setRows(result.data);
+      if (result.error) {
+        setLoadError(result.error);
+      }
+      setLoading(false);
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFarmerId]);
+
+  const [rangeDays, setRangeDays] = useState<number>(INSIGHTS_RANGE_OPTIONS[0].days);
+  const [selectedFieldIds, setSelectedFieldIds] = useState<Set<string> | null>(null);
+  const [openFilter, setOpenFilter] = useState<'range' | 'fields' | null>(null);
+  const filtersRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!openFilter) return;
+    function handlePointer(event: MouseEvent) {
+      if (!filtersRef.current?.contains(event.target as Node)) {
+        setOpenFilter(null);
+      }
+    }
+    document.addEventListener('mousedown', handlePointer);
+    return () => document.removeEventListener('mousedown', handlePointer);
+  }, [openFilter]);
+
+  const availableFields = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const row of rows) {
+      if (!byId.has(row.fieldId)) byId.set(row.fieldId, row.fieldName);
+    }
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
+  const activeFieldIds = selectedFieldIds ?? new Set(availableFields.map((f) => f.id));
+
+  const filteredRows = useMemo(
+    () => rows.filter((row) => activeFieldIds.has(row.fieldId)),
+    [rows, activeFieldIds],
+  );
+
+  const { series } = useMemo(
+    () => buildInsightsChartData(filteredRows, rangeDays),
+    [filteredRows, rangeDays],
+  );
+
+  const hasData = filteredRows.some((row) => {
+    const cutoff = new Date();
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() - (rangeDays - 1));
+    return new Date(row.day) >= cutoff;
+  });
+
+  const rangeLabel =
+    INSIGHTS_RANGE_OPTIONS.find((option) => option.days === rangeDays)?.label ?? `${rangeDays} days`;
+  const allFieldsSelected =
+    selectedFieldIds === null || activeFieldIds.size === availableFields.length;
+  const fieldsLabel = allFieldsSelected
+    ? `All ${availableFields.length} field${availableFields.length === 1 ? '' : 's'}`
+    : activeFieldIds.size === 1
+    ? availableFields.find((f) => activeFieldIds.has(f.id))?.name ?? '1 field'
+    : `${activeFieldIds.size} fields`;
+
+  function toggleField(id: string) {
+    const next = new Set(activeFieldIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedFieldIds(next);
+  }
+
+  return (
+    <section className="insights-panel" aria-labelledby="insights-title">
+      <header className="insights-header">
+        <h2 id="insights-title">Water logged</h2>
+        <p>Daily total mm at pivot.</p>
+      </header>
+
+      {loadError ? (
+        <p className="auth-feedback auth-feedback-error" aria-live="polite">
+          {loadError}
+        </p>
+      ) : null}
+
+      <div className="insights-filters" ref={filtersRef}>
+        <div className="insights-filter">
+          <button
+            type="button"
+            className="insights-filter-pill"
+            aria-haspopup="menu"
+            aria-expanded={openFilter === 'range'}
+            onClick={() => setOpenFilter(openFilter === 'range' ? null : 'range')}
+          >
+            <span className="insights-filter-label">RANGE</span>
+            <span className="insights-filter-value">{rangeLabel}</span>
+            <span className="insights-filter-chevron" aria-hidden>▾</span>
+          </button>
+          {openFilter === 'range' ? (
+            <div className="insights-filter-menu" role="menu">
+              {INSIGHTS_RANGE_OPTIONS.map((option) => (
+                <button
+                  key={option.days}
+                  type="button"
+                  className="insights-filter-item"
+                  role="menuitemradio"
+                  aria-checked={rangeDays === option.days}
+                  onClick={() => {
+                    setRangeDays(option.days);
+                    setOpenFilter(null);
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="insights-filter">
+          <button
+            type="button"
+            className="insights-filter-pill"
+            aria-haspopup="menu"
+            aria-expanded={openFilter === 'fields'}
+            onClick={() => setOpenFilter(openFilter === 'fields' ? null : 'fields')}
+            disabled={availableFields.length === 0}
+          >
+            <span className="insights-filter-label">SHOW</span>
+            <span className="insights-filter-value">{fieldsLabel}</span>
+            <span className="insights-filter-chevron" aria-hidden>▾</span>
+          </button>
+          {openFilter === 'fields' ? (
+            <div className="insights-filter-menu" role="menu">
+              <button
+                type="button"
+                className="insights-filter-item"
+                onClick={() => setSelectedFieldIds(null)}
+              >
+                {allFieldsSelected ? '✓ ' : ''}All fields
+              </button>
+              {availableFields.map((field) => {
+                const checked = activeFieldIds.has(field.id);
+                return (
+                  <button
+                    key={field.id}
+                    type="button"
+                    className="insights-filter-item"
+                    role="menuitemcheckbox"
+                    aria-checked={checked}
+                    onClick={() => toggleField(field.id)}
+                  >
+                    {checked ? '✓ ' : ''}{field.name}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="insights-card">
+      {loading ? (
+        <p className="insights-state">Loading insights…</p>
+      ) : !hasData ? (
+        <p className="insights-state">
+          No water logged in the selected range.
+        </p>
+      ) : (
+        <div className="insights-chart">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={series} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(74, 90, 74, 0.12)" />
+              <XAxis
+                dataKey="day"
+                tick={{ fontSize: 11, fill: '#4a5a4a' }}
+                interval="preserveStartEnd"
+                minTickGap={16}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#4a5a4a' }}
+                width={40}
+                label={{
+                  value: 'mm',
+                  position: 'top',
+                  offset: 12,
+                  fontSize: 11,
+                  fill: '#4a5a4a',
+                }}
+              />
+              <Tooltip
+                formatter={(value) => `${Number(value ?? 0).toFixed(1)} mm`}
+                contentStyle={{
+                  background: '#ffffff',
+                  border: '1px solid rgba(74, 90, 74, 0.18)',
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}
+              />
+              <Bar dataKey="totalMm" fill={INSIGHTS_FIELD_COLORS[0]} />
+
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      </div>
+    </section>
+  );
+}
+
 function PlaceholderPanel({ tab }: { tab: TabConfig }) {
   return (
     <section className="placeholder-panel" aria-labelledby={`${tab.id}-placeholder-title`}>
@@ -2631,11 +2991,9 @@ export default function App() {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [appState, setAppState] = useState<AppState>('loading');
   const [farmerNameInput, setFarmerNameInput] = useState('');
-  const [currentFarmerName, setCurrentFarmerName] = useState('');
   const [currentFarmerId, setCurrentFarmerId] = useState('');
   const [farmerMessage, setFarmerMessage] = useState<string | null>(null);
   const [farmerError, setFarmerError] = useState<string | null>(null);
-  const [fieldFlowMessage, setFieldFlowMessage] = useState<string | null>(null);
   const [savingFarmer, setSavingFarmer] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const activeTab = route.tabId;
@@ -2699,7 +3057,6 @@ export default function App() {
 
         writeStoredFarmer(nextFarmer);
         setCurrentFarmerId(nextFarmer.id);
-        setCurrentFarmerName(nextFarmer.name);
         setFarmerMessage(null);
         setFarmerError(null);
         setAppState('signed-in');
@@ -2785,7 +3142,6 @@ export default function App() {
 
     writeStoredFarmer(nextFarmer);
     setCurrentFarmerId(nextFarmer.id);
-    setCurrentFarmerName(nextFarmer.name);
     setFarmerMessage(
       farmer.was_created
         ? `Farmer profile created for ${farmer.name}.`
@@ -2800,22 +3156,18 @@ export default function App() {
     navigateTo({ tabId: 'fields', screen: 'workspace' }, true);
     setFarmerMessage(null);
     setFarmerError(null);
-    setFieldFlowMessage(null);
     setCurrentFarmerId('');
-    setCurrentFarmerName('');
     setFarmerNameInput('');
     setAppState('signed-out');
   }
 
   function handleOpenAddFieldScreen() {
     setAccountMenuOpen(false);
-    setFieldFlowMessage(null);
     navigateTo({ tabId: 'fields', screen: 'add-field' });
   }
 
   function handleOpenEditFieldScreen(fieldId: string) {
     setAccountMenuOpen(false);
-    setFieldFlowMessage(null);
     navigateTo({ tabId: 'fields', screen: 'edit-field', fieldId });
   }
 
@@ -2824,18 +3176,15 @@ export default function App() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
-  function handleFieldCreated(fieldName: string) {
-    setFieldFlowMessage(`Saved ${fieldName}.`);
+  function handleFieldCreated() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
-  function handleFieldUpdated(fieldName: string) {
-    setFieldFlowMessage(`Updated ${fieldName}.`);
+  function handleFieldUpdated() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
-  function handleFieldDeleted(fieldName: string) {
-    setFieldFlowMessage(`Deleted ${fieldName}.`);
+  function handleFieldDeleted() {
     navigateTo({ tabId: 'fields', screen: 'workspace' });
   }
 
@@ -2958,7 +3307,7 @@ export default function App() {
           {activeScreen === 'workspace' ? (
             <section
               className={
-                activeTab === 'fields' || activeTab === 'actions'
+                activeTab === 'fields' || activeTab === 'actions' || activeTab === 'insights'
                   ? 'workspace-card'
                   : 'content-card workspace-card'
               }
@@ -2972,14 +3321,11 @@ export default function App() {
                     onAddField={handleOpenAddFieldScreen}
                     onEditField={handleOpenEditFieldScreen}
                   />
-                  {fieldFlowMessage ? (
-                    <p className="auth-feedback auth-feedback-success" aria-live="polite">
-                      {fieldFlowMessage}
-                    </p>
-                  ) : null}
                 </>
               ) : activeTab === 'actions' ? (
                 <ActionsPanel currentFarmerId={currentFarmerId} />
+              ) : activeTab === 'insights' ? (
+                <InsightsPanel currentFarmerId={currentFarmerId} />
               ) : (
                 <PlaceholderPanel tab={tabs.find(({ id }) => id === activeTab) ?? tabs[0]} />
               )}

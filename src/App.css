@@ -337,6 +337,18 @@ p {
   color: var(--ink);
 }
 
+.btn-edit-field {
+  background: var(--green-soft);
+  color: var(--green-dark);
+  border-color: var(--green-dark);
+}
+
+.btn-edit-field:hover {
+  background: var(--green-dark);
+  color: #ffffff;
+  border-color: var(--green-dark);
+}
+
 .app-shell {
   min-height: calc(100vh - var(--nav-h) - 5rem);
   padding: 0.5rem 0 calc(7.5rem + env(safe-area-inset-bottom));
@@ -760,13 +772,26 @@ p {
   color: var(--text-muted);
 }
 
+.field-summary-angle {
+  font-style: italic;
+  font-weight: 400;
+}
+
 .field-summary-actions {
   margin-top: 0.8rem;
 }
 
 .pivot-angle-readout {
   margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
   color: var(--text);
+}
+
+.pivot-angle-value {
+  margin-left: 0.4rem;
+  font-weight: 400;
+  font-style: italic;
 }
 
 .btn-danger {
@@ -805,12 +830,10 @@ p {
 }
 
 .map-draw-controls {
-  position: absolute;
-  left: 1rem;
-  bottom: 1rem;
   display: inline-flex;
   gap: 0.4rem;
   padding: 0.4rem;
+  margin: 0 0 0.6rem;
   border-radius: 999px;
   background: var(--paper);
   border: 1px solid var(--ink-line);
@@ -890,14 +913,127 @@ code {
   }
 
   .map-draw-controls {
-    left: 0.75rem;
-    bottom: 0.75rem;
+    margin-bottom: 0.5rem;
   }
 }
 
 .actions-panel {
   display: grid;
   gap: 1rem;
+}
+
+.insights-panel {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.insights-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.insights-state {
+  color: var(--text-muted);
+}
+
+.insights-chart {
+  width: 100%;
+}
+
+.insights-card {
+  background: var(--paper);
+  border: 1px solid var(--ink-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 1.25rem;
+}
+
+.insights-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.insights-filter {
+  position: relative;
+}
+
+.insights-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--ink-line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.insights-filter-pill:hover:not(:disabled),
+.insights-filter-pill:focus-visible {
+  border-color: rgba(74, 90, 74, 0.25);
+  outline: none;
+}
+
+.insights-filter-pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.insights-filter-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.insights-filter-value {
+  font-weight: 600;
+}
+
+.insights-filter-chevron {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.insights-filter-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 20;
+  min-width: 11rem;
+  padding: 0.35rem;
+  border: 1px solid var(--ink-line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 0.15rem;
+}
+
+.insights-filter-item {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.insights-filter-item:hover,
+.insights-filter-item:focus-visible {
+  background: var(--bg-muted);
+  outline: none;
 }
 
 .actions-header {
@@ -925,7 +1061,13 @@ code {
 }
 
 .actions-map-canvas {
-  min-height: 28rem;
+  min-height: 30rem;
+}
+
+@media (max-width: 700px) {
+  .actions-map-canvas {
+    min-height: 22rem;
+  }
 }
 
 .pivot-angle-grid {
