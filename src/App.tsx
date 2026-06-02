@@ -74,7 +74,9 @@ type WaterPerDayRow = {
   fieldId: string;
   fieldName: string;
   totalMm: number;
+  totalLiters: number;
 };
+type InsightsUnit = 'mm' | 'liters';
 type ActionRecord = {
   id: string;
   fieldId: string;
@@ -429,16 +431,10 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
     };
   }
 
-  const cutoff = new Date();
-  cutoff.setHours(0, 0, 0, 0);
-  cutoff.setDate(cutoff.getDate() - (days - 1));
-  const cutoffIso = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
-
-  const { data, error } = await supabase
-    .from('actions')
-    .select('end_date, mm_applied_at_pivot, field_id, fields!inner(id, field_name, farmer_id)')
-    .eq('fields.farmer_id', currentFarmerId)
-    .gte('end_date', cutoffIso);
+  const { data, error } = await supabase.rpc('get_water_per_day_for_farmer', {
+    input_farmer_id: currentFarmerId,
+    input_days: days,
+  });
 
   if (error) {
     return {
@@ -448,18 +444,20 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
   }
 
   type ActionRow = {
-    end_date: string;
-    mm_applied_at_pivot: number | string | null;
+    day: string;
     field_id: string;
-    fields: { id: string; field_name: string; farmer_id: string } | null;
+    field_name: string;
+    total_mm: number | string | null;
+    total_liters: number | string | null;
   };
 
   return {
     data: ((data ?? []) as unknown as ActionRow[]).map((row) => ({
-      day: row.end_date,
+      day: row.day,
       fieldId: row.field_id,
-      fieldName: row.fields?.field_name ?? 'Unknown field',
-      totalMm: Number(row.mm_applied_at_pivot ?? 0),
+      fieldName: row.field_name,
+      totalMm: Number(row.total_mm ?? 0),
+      totalLiters: Number(row.total_liters ?? 0),
     })),
     error: null as string | null,
   };
@@ -3427,16 +3425,29 @@ function formatInsightsDay(isoDate: string) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function buildInsightsChartData(rows: WaterPerDayRow[], days: number) {
+function formatCompactLiters(value: number) {
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+
+  if (Math.abs(value) >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  }
+
+  return value.toFixed(0);
+}
+
+function buildInsightsChartData(rows: WaterPerDayRow[], days: number, unit: InsightsUnit) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const totalsByDay = new Map<string, number>();
   for (const row of rows) {
-    totalsByDay.set(row.day, (totalsByDay.get(row.day) ?? 0) + row.totalMm);
+    const value = unit === 'liters' ? row.totalLiters : row.totalMm;
+    totalsByDay.set(row.day, (totalsByDay.get(row.day) ?? 0) + value);
   }
 
-  const series: Array<{ day: string; fullDate: string; totalMm: number }> = [];
+  const series: Array<{ day: string; fullDate: string; totalWater: number }> = [];
   for (let offset = days - 1; offset >= 0; offset -= 1) {
     const date = new Date(today);
     date.setDate(date.getDate() - offset);
@@ -3445,7 +3456,7 @@ function buildInsightsChartData(rows: WaterPerDayRow[], days: number) {
     series.push({
       day: formatInsightsDay(iso),
       fullDate: iso,
-      totalMm: totalsByDay.get(iso) ?? 0,
+      totalWater: totalsByDay.get(iso) ?? 0,
     });
   }
 
@@ -3483,6 +3494,7 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
 
   const [rangeDays, setRangeDays] = useState<number>(INSIGHTS_RANGE_OPTIONS[0].days);
   const [selectedFieldIds, setSelectedFieldIds] = useState<Set<string> | null>(null);
+  const [unit, setUnit] = useState<InsightsUnit>('mm');
   const [openFilter, setOpenFilter] = useState<'range' | 'fields' | null>(null);
   const filtersRef = useRef<HTMLDivElement | null>(null);
 
@@ -3515,8 +3527,8 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
   );
 
   const { series } = useMemo(
-    () => buildInsightsChartData(filteredRows, rangeDays),
-    [filteredRows, rangeDays],
+    () => buildInsightsChartData(filteredRows, rangeDays, unit),
+    [filteredRows, rangeDays, unit],
   );
 
   const hasData = filteredRows.some((row) => {
@@ -3535,6 +3547,16 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     : activeFieldIds.size === 1
     ? availableFields.find((f) => activeFieldIds.has(f.id))?.name ?? '1 field'
     : `${activeFieldIds.size} fields`;
+  const unitLabel = unit === 'liters' ? 'liters' : 'mm';
+  const chartDescription =
+    unit === 'liters'
+      ? 'Daily water volume by field area.'
+      : 'Daily total mm at pivot.';
+  const axisLabel = unit === 'liters' ? 'L' : 'mm';
+  const tooltipSuffix = unit === 'liters' ? ' L' : ' mm';
+  const tooltipDecimals = unit === 'liters' ? 0 : 1;
+  const yAxisWidth = unit === 'liters' ? 48 : 40;
+  const chartLeftMargin = unit === 'liters' ? 4 : 0;
 
   function toggleField(id: string) {
     const next = new Set(activeFieldIds);
@@ -3550,7 +3572,7 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
     <section className="insights-panel" aria-labelledby="insights-title">
       <header className="insights-header">
         <h2 id="insights-title">Water logged</h2>
-        <p>Daily total mm at pivot.</p>
+        <p>{chartDescription}</p>
       </header>
 
       {loadError ? (
@@ -3560,6 +3582,27 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       ) : null}
 
       <div className="insights-filters" ref={filtersRef}>
+        <div className="insights-unit-toggle" role="group" aria-label="Water unit">
+          <button
+            type="button"
+            className={`insights-unit-button${unit === 'mm' ? ' is-active' : ''}`}
+            aria-pressed={unit === 'mm'}
+            onClick={() => setUnit('mm')}
+          >
+            mm
+          </button>
+          <button
+            type="button"
+            className={`insights-unit-button${unit === 'liters' ? ' is-active' : ''}`}
+            aria-label="Liters"
+            aria-pressed={unit === 'liters'}
+            title="Liters"
+            onClick={() => setUnit('liters')}
+          >
+            L
+          </button>
+        </div>
+
         <div className="insights-filter">
           <button
             type="button"
@@ -3645,7 +3688,7 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
       ) : (
         <div className="insights-chart">
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={series} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
+            <BarChart data={series} margin={{ top: 24, right: 8, left: chartLeftMargin, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(74, 90, 74, 0.12)" />
               <XAxis
                 dataKey="day"
@@ -3655,9 +3698,14 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
               />
               <YAxis
                 tick={{ fontSize: 11, fill: '#4a5a4a' }}
-                width={40}
+                tickFormatter={(value) =>
+                  unit === 'liters'
+                    ? formatCompactLiters(Number(value ?? 0))
+                    : Number(value ?? 0).toFixed(0)
+                }
+                width={yAxisWidth}
                 label={{
-                  value: 'mm',
+                  value: axisLabel,
                   position: 'top',
                   offset: 12,
                   fontSize: 11,
@@ -3665,7 +3713,10 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                 }}
               />
               <Tooltip
-                formatter={(value) => `${Number(value ?? 0).toFixed(1)} mm`}
+                formatter={(value) =>
+                  `${Number(value ?? 0).toFixed(tooltipDecimals)}${tooltipSuffix}`
+                }
+                labelFormatter={(label) => `${label} (${unitLabel})`}
                 contentStyle={{
                   background: '#ffffff',
                   border: '1px solid rgba(74, 90, 74, 0.18)',
@@ -3673,7 +3724,7 @@ function InsightsPanel({ currentFarmerId }: { currentFarmerId: string }) {
                   fontSize: 12,
                 }}
               />
-              <Bar dataKey="totalMm" fill={INSIGHTS_FIELD_COLORS[0]} />
+              <Bar dataKey="totalWater" fill={INSIGHTS_FIELD_COLORS[0]} />
 
             </BarChart>
           </ResponsiveContainer>
@@ -3954,7 +4005,7 @@ export default function App() {
                   autoComplete="name"
                   value={farmerNameInput}
                   onChange={(event) => setFarmerNameInput(event.target.value)}
-                  placeholder="Frikkie Demo Farmer"
+                  placeholder="Enter farmer name"
                   required
                 />
                 <button

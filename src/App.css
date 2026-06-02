@@ -999,6 +999,39 @@ code {
   position: relative;
 }
 
+.insights-unit-toggle {
+  display: inline-flex;
+  padding: 0.2rem;
+  border: 1px solid var(--ink-line);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+
+.insights-unit-button {
+  min-width: 4.25rem;
+  padding: 0.35rem 0.65rem;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.insights-unit-button:hover,
+.insights-unit-button:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.insights-unit-button.is-active {
+  background: var(--green);
+  color: #ffffff;
+}
+
 .insights-filter-pill {
   display: inline-flex;
   align-items: center;
