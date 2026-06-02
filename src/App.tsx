@@ -431,10 +431,16 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
     };
   }
 
-  const { data, error } = await supabase.rpc('get_water_per_day_for_farmer', {
-    input_farmer_id: currentFarmerId,
-    input_days: days,
-  });
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - (days - 1));
+  const cutoffIso = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+
+  const { data, error } = await supabase
+    .from('actions')
+    .select('end_date, movement_degrees, mm_applied_at_pivot, field_id, fields!inner(id, field_name, boundary, farmer_id)')
+    .eq('fields.farmer_id', currentFarmerId)
+    .gte('end_date', cutoffIso);
 
   if (error) {
     return {
@@ -444,21 +450,30 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
   }
 
   type ActionRow = {
-    day: string;
+    end_date: string;
+    movement_degrees: number | string | null;
+    mm_applied_at_pivot: number | string | null;
     field_id: string;
-    field_name: string;
-    total_mm: number | string | null;
-    total_liters: number | string | null;
+    fields: { id: string; field_name: string; boundary: unknown; farmer_id: string } | null;
   };
 
   return {
-    data: ((data ?? []) as unknown as ActionRow[]).map((row) => ({
-      day: row.day,
-      fieldId: row.field_id,
-      fieldName: row.field_name,
-      totalMm: Number(row.total_mm ?? 0),
-      totalLiters: Number(row.total_liters ?? 0),
-    })),
+    data: ((data ?? []) as unknown as ActionRow[]).map((row) => {
+      const totalMm = computeEffectiveMm(
+        Number(row.mm_applied_at_pivot ?? 0),
+        Number(row.movement_degrees ?? 0),
+      );
+      const boundary = parseBoundary(row.fields?.boundary);
+      const areaSquareMeters = boundary ? getPolygonAreaSquareMeters(boundary) : 0;
+
+      return {
+        day: row.end_date,
+        fieldId: row.field_id,
+        fieldName: row.fields?.field_name ?? 'Unknown field',
+        totalMm,
+        totalLiters: totalMm * areaSquareMeters,
+      };
+    }),
     error: null as string | null,
   };
 }
@@ -629,6 +644,49 @@ function deriveCircleFromPolygon(
     ) / openRing.length;
 
   return radiusMeters > 0 ? { center, radiusMeters } : null;
+}
+
+function getPolygonAreaSquareMeters(polygon: PolygonGeometry) {
+  const ring = polygon.coordinates[0];
+  if (!ring || ring.length < 4) return 0;
+
+  const openRing = ring.slice(0, -1);
+  if (openRing.length < 3) return 0;
+
+  const origin = ring[0];
+  const centerLatRadians =
+    (openRing.reduce((sum, coordinate) => sum + coordinate[1], 0) / openRing.length) *
+    (Math.PI / 180);
+  const originLngRadians = origin[0] * (Math.PI / 180);
+  const originLatRadians = origin[1] * (Math.PI / 180);
+  const semiMajorAxisMeters = 6_378_137;
+  const flattening = 1 / 298.257223563;
+  const eccentricitySquared = flattening * (2 - flattening);
+  const centerLatSin = Math.sin(centerLatRadians);
+  const radiusDenominator = 1 - eccentricitySquared * centerLatSin * centerLatSin;
+  const meridionalRadiusMeters =
+    (semiMajorAxisMeters * (1 - eccentricitySquared)) /
+    Math.pow(radiusDenominator, 1.5);
+  const primeVerticalRadiusMeters =
+    semiMajorAxisMeters / Math.sqrt(radiusDenominator);
+  const lngScaleMeters = primeVerticalRadiusMeters * Math.cos(centerLatRadians);
+  const latScaleMeters = meridionalRadiusMeters;
+
+  let area = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const current = ring[index];
+    const next = ring[index + 1];
+    if (!current || !next) continue;
+
+    const currentX = (current[0] * (Math.PI / 180) - originLngRadians) * lngScaleMeters;
+    const currentY = (current[1] * (Math.PI / 180) - originLatRadians) * latScaleMeters;
+    const nextX = (next[0] * (Math.PI / 180) - originLngRadians) * lngScaleMeters;
+    const nextY = (next[1] * (Math.PI / 180) - originLatRadians) * latScaleMeters;
+
+    area += currentX * nextY - nextX * currentY;
+  }
+
+  return Math.abs(area) / 2;
 }
 
 function buildPivotOverlayGeoJson(
