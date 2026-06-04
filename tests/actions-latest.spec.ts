@@ -24,17 +24,19 @@ async function seedPivotFarmer() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
   const suffix = randomUUID().slice(0, 8);
   const farmerName = `Action Shot ${suffix}`;
+  const normalizedName = farmerName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '.');
 
-  const { data: farmerRows, error: farmerError } = await client.rpc('upsert_farmer', {
-    input_name: farmerName,
-  });
+  const { data: farmer, error: farmerError } = await client
+    .from('farmers')
+    .insert({ name: farmerName, normalized_name: normalizedName })
+    .select('id, name')
+    .single();
   if (farmerError) throw farmerError;
 
-  const farmer = (farmerRows as Array<{ id: string; name: string }>)[0];
-  const { error: fieldError } = await client.rpc('create_field', {
-    input_farmer_id: farmer.id,
-    input_field_name: 'East Pivot',
-    input_boundary: {
+  const { error: fieldError } = await client.from('fields').insert({
+    farmer_id: farmer.id,
+    field_name: 'East Pivot',
+    boundary: {
       type: 'Polygon',
       coordinates: [
         [
@@ -46,8 +48,8 @@ async function seedPivotFarmer() {
         ],
       ],
     },
-    input_field_type: 'pivot',
-    input_pivot_angle_degrees: 45,
+    field_type: 'pivot',
+    pivot_angle_degrees: 45,
   });
   if (fieldError) throw fieldError;
 
@@ -77,10 +79,21 @@ test('actions page latest screenshot', async ({ page }) => {
   await page.waitForTimeout(1_500);
   const mapBox = await mapCanvas.boundingBox();
   if (!mapBox) throw new Error('Actions map canvas is not visible.');
-  await page.mouse.click(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
-  await page.waitForTimeout(1_200);
+  const nextButton = page.getByRole('button', { name: 'Next', exact: true });
+  for (const [xFactor, yFactor] of [
+    [0.5, 0.5],
+    [0.45, 0.5],
+    [0.55, 0.5],
+    [0.5, 0.45],
+    [0.5, 0.55],
+  ] as const) {
+    await page.mouse.click(mapBox.x + mapBox.width * xFactor, mapBox.y + mapBox.height * yFactor);
+    if (await nextButton.isEnabled()) break;
+    await page.waitForTimeout(400);
+  }
 
-  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(nextButton).toBeEnabled();
+  await nextButton.click();
   await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
   await page.getByLabel('Millimetres at pivot').fill('20');
 

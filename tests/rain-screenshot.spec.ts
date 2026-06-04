@@ -20,10 +20,10 @@ const envMap = new Map(envEntries);
 const supabaseUrl = envMap.get('VITE_SUPABASE_URL') ?? '';
 const supabasePublishableKey = envMap.get('VITE_SUPABASE_PUBLISHABLE_KEY') ?? '';
 
-async function seedPivotFarmer() {
+async function seedRainFarmer() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
   const suffix = randomUUID().slice(0, 8);
-  const farmerName = `Action Farmer ${suffix}`;
+  const farmerName = `Rain Shot ${suffix}`;
   const normalizedName = farmerName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '.');
 
   const { data: farmer, error: farmerError } = await client
@@ -33,31 +33,53 @@ async function seedPivotFarmer() {
     .single();
   if (farmerError) throw farmerError;
 
-  const { error: fieldError } = await client.from('fields').insert({
-    farmer_id: farmer.id,
-    field_name: 'East Pivot',
-    boundary: {
-      type: 'Polygon',
-      coordinates: [
-        [
-          [24.67, -28.47],
-          [24.69, -28.47],
-          [24.69, -28.49],
-          [24.67, -28.49],
-          [24.67, -28.47],
+  const fieldsPayload = [
+    {
+      farmer_id: farmer.id,
+      field_name: 'East Pivot',
+      boundary: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [24.670, -28.470],
+            [24.685, -28.470],
+            [24.685, -28.485],
+            [24.670, -28.485],
+            [24.670, -28.470],
+          ],
         ],
-      ],
+      },
+      field_type: 'pivot',
+      pivot_angle_degrees: 45,
     },
-    field_type: 'pivot',
-    pivot_angle_degrees: 45,
-  });
-  if (fieldError) throw fieldError;
+    {
+      farmer_id: farmer.id,
+      field_name: 'West Pivot',
+      boundary: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [24.650, -28.470],
+            [24.665, -28.470],
+            [24.665, -28.485],
+            [24.650, -28.485],
+            [24.650, -28.470],
+          ],
+        ],
+      },
+      field_type: 'pivot',
+      pivot_angle_degrees: 270,
+    },
+  ];
+
+  const { error: fieldsError } = await client.from('fields').insert(fieldsPayload);
+  if (fieldsError) throw fieldsError;
 
   return { farmerName };
 }
 
-test('actions tab renders pivot map and effective mm', async ({ page }) => {
-  const seeded = await seedPivotFarmer();
+test('rain logging and insights screenshots', async ({ page }) => {
+  const seeded = await seedRainFarmer();
 
   await page.goto('/');
   await page.getByLabel('Name', { exact: true }).fill(seeded.farmerName);
@@ -74,41 +96,38 @@ test('actions tab renders pivot map and effective mm', async ({ page }) => {
   await page.getByRole('button', { name: 'Log new action', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log a pivot action' })).toBeVisible();
 
-  const mapCanvas = page.getByTestId('actions-map-canvas');
-  await expect(mapCanvas).toBeVisible();
-  await page.waitForTimeout(1_200);
-  const mapBox = await mapCanvas.boundingBox();
-  if (!mapBox) throw new Error('Actions map canvas is not visible.');
-  const nextButton = page.getByRole('button', { name: 'Next', exact: true });
-  for (const [xFactor, yFactor] of [
-    [0.5, 0.5],
-    [0.45, 0.5],
-    [0.55, 0.5],
-    [0.5, 0.45],
-    [0.5, 0.55],
-  ] as const) {
-    await page.mouse.click(mapBox.x + mapBox.width * xFactor, mapBox.y + mapBox.height * yFactor);
-    if (await nextButton.isEnabled()) break;
-    await page.waitForTimeout(400);
-  }
-
-  await expect(nextButton).toBeEnabled();
-  await nextButton.click();
-  await expect(page.getByLabel('Millimetres at pivot')).toBeVisible();
-  await page.getByLabel('Millimetres at pivot').fill('20');
+  await page.getByRole('button', { name: 'Rain', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Log a rain action' })).toBeVisible();
+  await expect(page.getByLabel('Millimetres of rain')).toBeVisible();
+  await page.getByLabel('Millimetres of rain').fill('12');
 
   const dir = resolve('screenshots');
   mkdirSync(dir, { recursive: true });
   await page.screenshot({
-    path: resolve(dir, 'actions-flow.png'),
+    path: resolve(dir, 'rain-flow.png'),
     fullPage: true,
   });
 
-  await page.getByRole('button', { name: 'Log action', exact: true }).click();
+  await page.getByRole('button', { name: /^Log rain across/ }).click();
 
-  // Logging returns to the list, where the new action now appears.
   await expect(page.getByRole('heading', { name: 'Actions', exact: true })).toBeVisible({
     timeout: 10_000,
   });
+  // The list now has the rain rows.
   await expect(page.getByText('East Pivot', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Insights', exact: true }).click();
+  await expect(page).toHaveURL(/\/insights$/);
+  await expect(page.getByRole('heading', { name: 'Water logged' })).toBeVisible();
+  await page.waitForTimeout(800);
+  await page.screenshot({
+    path: resolve(dir, 'insights-after-rain.png'),
+    fullPage: true,
+  });
+
+  // Also a "latest.png" pointer for the most recent capture.
+  await page.screenshot({
+    path: resolve(dir, 'latest.png'),
+    fullPage: true,
+  });
 });

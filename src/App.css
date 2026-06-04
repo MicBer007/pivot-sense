@@ -999,13 +999,19 @@ code {
   position: relative;
 }
 
-.insights-unit-toggle {
+.insights-unit-toggle,
+.actions-mode-toggle {
   display: inline-flex;
   padding: 0.2rem;
   border: 1px solid var(--ink-line);
   border-radius: var(--radius-pill);
   background: var(--paper);
   box-shadow: var(--shadow-sm);
+}
+
+.actions-mode-toggle {
+  align-self: flex-start;
+  margin: 0.5rem 0 0.25rem;
 }
 
 .insights-unit-button {

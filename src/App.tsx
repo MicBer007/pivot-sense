@@ -37,6 +37,7 @@ type LineStringGeometry = {
   coordinates: Coordinate[];
 };
 type PivotSweepDirection = 1 | -1;
+type ActionType = 'irrigation' | 'rain';
 type MapFeature = {
   type: 'Feature';
   geometry: PolygonGeometry | PointGeometry | LineStringGeometry;
@@ -65,6 +66,10 @@ type RpcFarmerRow = {
   name: string;
   was_created?: boolean;
 };
+type FarmerLookupRow = {
+  id: string;
+  name: string;
+};
 type StoredFarmer = {
   id: string;
   name: string;
@@ -86,12 +91,14 @@ type ActionRecord = {
   mmAppliedAtPivot: number;
   startPivotAngleDegrees: number;
   sweepDirection: PivotSweepDirection;
+  actionType: ActionType;
   createdAt: string;
 };
 type RecentAction = {
   fieldId: string;
   movementDegrees: number;
   mmApplied: number;
+  actionType: ActionType;
   createdAt: string;
 };
 type TabConfig = {
@@ -354,6 +361,128 @@ function parseFieldRecord(record: RpcFieldRow): FieldRecord | null {
   } satisfies FieldRecord;
 }
 
+function normalizeFarmerName(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/(^\.+|\.+$)/g, '')
+    .replace(/\.{2,}/g, '.');
+
+  return normalized || 'farmer';
+}
+
+function getFieldWritePayload(
+  farmerId: string,
+  fieldName: string,
+  boundary: PolygonGeometry,
+  fieldType: FieldType,
+  pivotAngleDegrees: number | null,
+) {
+  return {
+    farmer_id: farmerId,
+    field_name: fieldName.trim(),
+    boundary,
+    field_type: fieldType,
+    pivot_angle_degrees:
+      fieldType === 'pivot' && pivotAngleDegrees !== null
+        ? normalizeAngleDegrees(pivotAngleDegrees)
+        : null,
+  };
+}
+
+async function fetchFarmerById(farmerId: string) {
+  if (!supabase || !farmerId) {
+    return {
+      data: null as FarmerLookupRow | null,
+      error: null as string | null,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('farmers')
+    .select('id, name')
+    .eq('id', farmerId)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      data: null as FarmerLookupRow | null,
+      error: error.message,
+    };
+  }
+
+  return {
+    data: data as FarmerLookupRow | null,
+    error: null as string | null,
+  };
+}
+
+async function upsertFarmerByName(name: string) {
+  if (!supabase) {
+    return {
+      data: null as RpcFarmerRow | null,
+      error: 'Supabase is not configured.',
+    };
+  }
+
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    return {
+      data: null as RpcFarmerRow | null,
+      error: 'Name is required.',
+    };
+  }
+
+  const normalizedName = normalizeFarmerName(trimmedName);
+  const { data: existingFarmer, error: lookupError } = await supabase
+    .from('farmers')
+    .select('id, name')
+    .eq('normalized_name', normalizedName)
+    .maybeSingle();
+
+  if (lookupError) {
+    return {
+      data: null as RpcFarmerRow | null,
+      error: lookupError.message,
+    };
+  }
+
+  if (existingFarmer) {
+    return {
+      data: {
+        ...(existingFarmer as FarmerLookupRow),
+        was_created: false,
+      },
+      error: null,
+    };
+  }
+
+  const { data: insertedFarmer, error: insertError } = await supabase
+    .from('farmers')
+    .insert({
+      name: trimmedName,
+      normalized_name: normalizedName,
+    })
+    .select('id, name')
+    .single();
+
+  if (insertError) {
+    return {
+      data: null as RpcFarmerRow | null,
+      error: insertError.message,
+    };
+  }
+
+  return {
+    data: {
+      ...(insertedFarmer as FarmerLookupRow),
+      was_created: true,
+    },
+    error: null,
+  };
+}
+
 async function fetchFieldsForFarmer(currentFarmerId: string) {
   if (!supabase || !currentFarmerId) {
     return {
@@ -362,9 +491,11 @@ async function fetchFieldsForFarmer(currentFarmerId: string) {
     };
   }
 
-  const { data, error } = await supabase.rpc('get_fields_for_farmer', {
-    input_farmer_id: currentFarmerId,
-  });
+  const { data, error } = await supabase
+    .from('fields')
+    .select('id, field_name, boundary, field_type, pivot_angle_degrees')
+    .eq('farmer_id', currentFarmerId)
+    .order('field_name', { ascending: true });
 
   if (error) {
     return {
@@ -391,7 +522,7 @@ async function fetchMostRecentActionPerField(currentFarmerId: string) {
 
   const { data, error } = await supabase
     .from('actions')
-    .select('field_id, movement_degrees, mm_applied_at_pivot, created_at, fields!inner(farmer_id)')
+    .select('field_id, movement_degrees, mm_applied_at_pivot, action_type, created_at, fields!inner(farmer_id)')
     .eq('fields.farmer_id', currentFarmerId)
     .order('created_at', { ascending: false });
 
@@ -406,6 +537,7 @@ async function fetchMostRecentActionPerField(currentFarmerId: string) {
     field_id: string;
     movement_degrees: number | string;
     mm_applied_at_pivot: number | string | null;
+    action_type: string | null;
     created_at: string;
   };
 
@@ -416,6 +548,7 @@ async function fetchMostRecentActionPerField(currentFarmerId: string) {
       fieldId: row.field_id,
       movementDegrees: Number(row.movement_degrees),
       mmApplied: Number(row.mm_applied_at_pivot ?? 0),
+      actionType: row.action_type === 'rain' ? 'rain' : 'irrigation',
       createdAt: row.created_at,
     });
   }
@@ -479,7 +612,7 @@ async function fetchWaterPerDayForFarmer(currentFarmerId: string, days = 7) {
 }
 
 const ACTION_SELECT_COLUMNS =
-  'id, end_date, movement_degrees, mm_applied_at_pivot, start_pivot_angle_degrees, sweep_direction, created_at, field_id, fields!inner(id, field_name, farmer_id)';
+  'id, end_date, movement_degrees, mm_applied_at_pivot, start_pivot_angle_degrees, sweep_direction, action_type, created_at, field_id, fields!inner(id, field_name, farmer_id)';
 
 type ActionRow = {
   id: string;
@@ -488,6 +621,7 @@ type ActionRow = {
   mm_applied_at_pivot: number | string | null;
   start_pivot_angle_degrees: number | string | null;
   sweep_direction: number | string | null;
+  action_type: string | null;
   created_at: string;
   field_id: string;
   fields: { id: string; field_name: string; farmer_id: string } | null;
@@ -503,6 +637,7 @@ function mapActionRow(row: ActionRow): ActionRecord {
     mmAppliedAtPivot: Number(row.mm_applied_at_pivot ?? 0),
     startPivotAngleDegrees: normalizeAngleDegrees(Number(row.start_pivot_angle_degrees ?? 0)),
     sweepDirection: Number(row.sweep_direction ?? 1) < 0 ? -1 : 1,
+    actionType: row.action_type === 'rain' ? 'rain' : 'irrigation',
     createdAt: row.created_at,
   };
 }
@@ -778,9 +913,10 @@ function buildSavedFieldsGeoJson(
     type: 'FeatureCollection',
     features: fields.map((field) => {
       const recent = recentActionsByFieldId.get(field.id);
+      const hasIrrigationWedge = recent !== undefined && recent.actionType !== 'rain';
       const mapLabel =
         field.fieldType === 'pivot'
-          ? recent
+          ? hasIrrigationWedge
             ? ''
             : field.fieldName
           : `${field.fieldName} - Normal`;
@@ -881,7 +1017,7 @@ function buildFieldPointLabelsGeoJson(
   const features: FeatureCollection['features'] = [];
   for (const entry of entries) {
     const action = recentActionsByFieldId.get(entry.id);
-    if (!action || action.movementDegrees <= 0) continue;
+    if (!action || action.movementDegrees <= 0 || action.actionType === 'rain') continue;
 
     const movement = Math.min(360, action.movementDegrees);
     const wedgeMidAngle = entry.pivotAngleDegrees - movement / 2;
@@ -927,7 +1063,7 @@ function buildRecentActionWedgesGeoJson(
   const features: FeatureCollection['features'] = [];
   for (const entry of entries) {
     const action = recentActionsByFieldId.get(entry.id);
-    if (!action || action.movementDegrees <= 0) continue;
+    if (!action || action.movementDegrees <= 0 || action.actionType === 'rain') continue;
 
     const movement = Math.min(360, action.movementDegrees);
     const startAngle = entry.pivotAngleDegrees - movement;
@@ -1721,13 +1857,15 @@ function FieldMapPanel({
     setFieldError(null);
     setFieldMessage(null);
 
-    const { error } = await supabase.rpc('create_field', {
-      input_farmer_id: currentFarmerId,
-      input_field_name: fieldNameDraft.trim(),
-      input_boundary: draftPolygon,
-      input_field_type: draftFieldType,
-      input_pivot_angle_degrees: draftFieldType === 'pivot' ? pivotAngleDraft : null,
-    });
+    const { error } = await supabase.from('fields').insert(
+      getFieldWritePayload(
+        currentFarmerId,
+        fieldNameDraft,
+        draftPolygon,
+        draftFieldType,
+        draftFieldType === 'pivot' ? pivotAngleDraft : null,
+      ),
+    );
 
     setSavingField(false);
 
@@ -1776,17 +1914,27 @@ function FieldMapPanel({
     setFieldError(null);
     setFieldMessage(null);
 
-    const { error } = await supabase.rpc('update_field', {
-      input_farmer_id: currentFarmerId,
-      input_field_id: fieldToSave.id,
-      input_field_name: fieldNameDraft.trim(),
-      input_pivot_angle_degrees: fieldToSave.fieldType === 'pivot' ? pivotAngleDraft : null,
-    });
+    const { data, error } = await supabase
+      .from('fields')
+      .update({
+        field_name: fieldNameDraft.trim(),
+        pivot_angle_degrees:
+          fieldToSave.fieldType === 'pivot' ? normalizeAngleDegrees(pivotAngleDraft) : null,
+      })
+      .eq('id', fieldToSave.id)
+      .eq('farmer_id', currentFarmerId)
+      .select('id')
+      .maybeSingle();
 
     setSavingField(false);
 
     if (error) {
       setFieldError(error.message);
+      return;
+    }
+
+    if (!data) {
+      setFieldError('Field not found.');
       return;
     }
 
@@ -1822,15 +1970,23 @@ function FieldMapPanel({
     setFieldError(null);
     setFieldMessage(null);
 
-    const { error } = await supabase.rpc('delete_field', {
-      input_farmer_id: currentFarmerId,
-      input_field_id: fieldToDelete.id,
-    });
+    const { data, error } = await supabase
+      .from('fields')
+      .delete()
+      .eq('id', fieldToDelete.id)
+      .eq('farmer_id', currentFarmerId)
+      .select('id')
+      .maybeSingle();
 
     setDeletingField(false);
 
     if (error) {
       setFieldError(error.message);
+      return;
+    }
+
+    if (!data) {
+      setFieldError('Field not found.');
       return;
     }
 
@@ -2505,6 +2661,11 @@ function ActionLogView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [step, setStep] = useState<'select' | 'details'>('select');
+  const [actionMode, setActionMode] = useState<ActionType>('irrigation');
+  const [rainMmRaw, setRainMmRaw] = useState<string>('');
+  const rainMmNumber = Number(rainMmRaw);
+  const rainMmValid =
+    rainMmRaw.trim() !== '' && Number.isFinite(rainMmNumber) && rainMmNumber >= 0;
 
   const pivotFields = fields.filter((field) => field.fieldType === 'pivot');
   const selectedField = pivotFields.find((field) => field.id === selectedFieldId) ?? null;
@@ -2588,7 +2749,7 @@ function ActionLogView({
   }, [pivotFields, selectedFieldId]);
 
   useEffect(() => {
-    if (loadingFields || step !== 'select' || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
+    if (loadingFields || actionMode !== 'irrigation' || step !== 'select' || !MAPBOX_ACCESS_TOKEN || !mapRef.current) {
       return;
     }
 
@@ -2654,7 +2815,7 @@ function ActionLogView({
       mapInstanceRef.current?.remove();
       mapInstanceRef.current = null;
     };
-  }, [loadingFields, step]);
+  }, [loadingFields, step, actionMode]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -2919,16 +3080,60 @@ function ActionLogView({
     setSaving(true);
     setSaveError(null);
 
-    const { error } = await supabase.rpc('log_action', {
-      input_farmer_id: currentFarmerId,
-      input_field_id: selectedField.id,
-      input_end_date: endDate,
-      input_movement_degrees: movementDegrees,
-      input_mm_applied_at_pivot: mmAppliedNumber,
-      input_new_pivot_angle_degrees: normalizeAngleDegrees(newAngle),
-      input_start_pivot_angle_degrees: normalizeAngleDegrees(startAngle),
-      input_sweep_direction: sweepDirection,
-    });
+    const { data: ownedField, error: fieldLookupError } = await supabase
+      .from('fields')
+      .select('id, field_type')
+      .eq('id', selectedField.id)
+      .eq('farmer_id', currentFarmerId)
+      .maybeSingle();
+
+    if (fieldLookupError) {
+      setSaving(false);
+      setSaveError(fieldLookupError.message);
+      return;
+    }
+
+    if (!ownedField) {
+      setSaving(false);
+      setSaveError('Field not found.');
+      return;
+    }
+
+    if ((ownedField as { field_type?: string | null }).field_type !== 'pivot') {
+      setSaving(false);
+      setSaveError('Actions can only be logged on pivot fields.');
+      return;
+    }
+
+    const { data: insertedAction, error: insertError } = await supabase
+      .from('actions')
+      .insert({
+        field_id: selectedField.id,
+        end_date: endDate,
+        movement_degrees: movementDegrees,
+        mm_applied_at_pivot: mmAppliedNumber,
+        start_pivot_angle_degrees: normalizeAngleDegrees(startAngle),
+        sweep_direction: sweepDirection,
+        action_type: 'irrigation',
+      })
+      .select('id')
+      .single();
+
+    if (insertError) {
+      setSaving(false);
+      setSaveError(insertError.message);
+      return;
+    }
+
+    const { error } = await supabase
+      .from('fields')
+      .update({ pivot_angle_degrees: normalizeAngleDegrees(newAngle) })
+      .eq('id', selectedField.id)
+      .eq('farmer_id', currentFarmerId);
+
+    if (error && insertedAction) {
+      await supabase.from('actions').delete().eq('id', (insertedAction as { id: string }).id);
+    }
 
     setSaving(false);
 
@@ -2941,52 +3146,111 @@ function ActionLogView({
     onLogged();
   }
 
-  if (!loadingFields && pivotFields.length === 0) {
-    return (
-      <section className="actions-panel" aria-labelledby="actions-title">
-        <header className="actions-header actions-subview-header">
-          <h2 id="actions-title">Log a pivot action</h2>
-          <button type="button" className="btn btn-secondary" onClick={onBack}>
-            Back
-          </button>
-        </header>
-        <div className="map-state-card">
-          <h3>No pivot fields</h3>
-          <p>
-            Add a pivot field on the Fields tab first, then come back to log an
-            irrigation action against it.
-          </p>
-        </div>
-      </section>
-    );
+  async function handleSaveRain() {
+    if (!supabase) {
+      setSaveError('Supabase is not configured.');
+      return;
+    }
+    if (!currentFarmerId) {
+      setSaveError('Choose a farmer first.');
+      return;
+    }
+    if (!endDate) {
+      setSaveError('Set the date.');
+      return;
+    }
+    if (!rainMmValid) {
+      setSaveError('Enter the millimetres of rain.');
+      return;
+    }
+    if (fields.length === 0) {
+      setSaveError('Add a field before logging rain.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+
+    const rows = fields.map((field) => ({
+      field_id: field.id,
+      end_date: endDate,
+      movement_degrees: 360,
+      mm_applied_at_pivot: rainMmNumber,
+      start_pivot_angle_degrees: 0,
+      sweep_direction: 1,
+      action_type: 'rain' as const,
+    }));
+
+    const { error: insertError } = await supabase.from('actions').insert(rows);
+
+    setSaving(false);
+
+    if (insertError) {
+      setSaveError(insertError.message);
+      return;
+    }
+
+    setRainMmRaw('');
+    onLogged();
   }
+
+  const headerTitle = actionMode === 'rain' ? 'Log a rain action' : 'Log a pivot action';
+  const headerDescription =
+    actionMode === 'rain'
+      ? `Enter the rain in millimetres. It will be applied to every field for this farmer (${fields.length} ${fields.length === 1 ? 'field' : 'fields'}).`
+      : step === 'select'
+        ? selectedField
+          ? 'Drag the pivot to where it stopped.'
+          : 'Tap a pivot on the map to get started.'
+        : 'Enter how much water the pivot put down, and set the date.';
 
   return (
     <section className="actions-panel" aria-labelledby="actions-title">
       <header className="actions-header actions-subview-header">
         <div>
-          <h2 id="actions-title">Log a pivot action</h2>
-          <p>
-            {step === 'select'
-              ? selectedField
-                ? 'Drag the pivot to where it stopped.'
-                : 'Tap a pivot on the map to get started.'
-              : 'Enter how much water the pivot put down, and set the date.'}
-          </p>
-          <span className="actions-steps" aria-hidden>
-            <span className={`actions-step-dot${step === 'select' ? ' is-active' : ''}`} />
-            <span className={`actions-step-dot${step === 'details' ? ' is-active' : ''}`} />
-          </span>
+          <h2 id="actions-title">{headerTitle}</h2>
+          <p>{headerDescription}</p>
+          {actionMode === 'irrigation' ? (
+            <span className="actions-steps" aria-hidden>
+              <span className={`actions-step-dot${step === 'select' ? ' is-active' : ''}`} />
+              <span className={`actions-step-dot${step === 'details' ? ' is-active' : ''}`} />
+            </span>
+          ) : null}
         </div>
         <button type="button" className="btn btn-secondary" onClick={onBack}>
           Back
         </button>
       </header>
 
+      <div className="actions-mode-toggle" role="group" aria-label="Action type">
+        <button
+          type="button"
+          className={`insights-unit-button${actionMode === 'irrigation' ? ' is-active' : ''}`}
+          aria-pressed={actionMode === 'irrigation'}
+          onClick={() => {
+            setActionMode('irrigation');
+            setSaveError(null);
+          }}
+        >
+          Irrigation
+        </button>
+        <button
+          type="button"
+          className={`insights-unit-button${actionMode === 'rain' ? ' is-active' : ''}`}
+          aria-pressed={actionMode === 'rain'}
+          onClick={() => {
+            setActionMode('rain');
+            setSaveError(null);
+          }}
+        >
+          Rain
+        </button>
+      </div>
+
       {loadingFields ? (
         <div className="map-state-card">
           <h3>Loading fields</h3>
-          <p>Fetching pivot fields for this farmer.</p>
+          <p>Fetching fields for this farmer.</p>
         </div>
       ) : null}
 
@@ -2996,7 +3260,17 @@ function ActionLogView({
         </p>
       ) : null}
 
-      {!loadingFields && step === 'select' && !MAPBOX_ACCESS_TOKEN ? (
+      {!loadingFields && actionMode === 'irrigation' && pivotFields.length === 0 ? (
+        <div className="map-state-card">
+          <h3>No pivot fields</h3>
+          <p>
+            Add a pivot field on the Fields tab first, then come back to log an
+            irrigation action against it.
+          </p>
+        </div>
+      ) : null}
+
+      {!loadingFields && actionMode === 'irrigation' && step === 'select' && !MAPBOX_ACCESS_TOKEN && pivotFields.length > 0 ? (
         <div className="map-state-card" data-testid="maps-setup-needed">
           <h3>Mapbox setup needed</h3>
           <p>
@@ -3006,7 +3280,7 @@ function ActionLogView({
         </div>
       ) : null}
 
-      {!loadingFields && step === 'select' ? (
+      {!loadingFields && actionMode === 'irrigation' && step === 'select' && pivotFields.length > 0 ? (
         <>
           {MAPBOX_ACCESS_TOKEN ? (
             <div className="map-stage actions-map-stage">
@@ -3032,7 +3306,7 @@ function ActionLogView({
         </>
       ) : null}
 
-      {!loadingFields && step === 'details' && selectedField ? (
+      {!loadingFields && actionMode === 'irrigation' && step === 'details' && selectedField ? (
         <>
           <div className="actions-form">
             <label className="auth-label" htmlFor="actions-mm">
@@ -3083,6 +3357,60 @@ function ActionLogView({
             </button>
           </div>
         </>
+      ) : null}
+
+      {!loadingFields && actionMode === 'rain' ? (
+        fields.length === 0 ? (
+          <div className="map-state-card">
+            <h3>No fields yet</h3>
+            <p>Add a field on the Fields tab before logging rain.</p>
+          </div>
+        ) : (
+          <>
+            <div className="actions-form">
+              <label className="auth-label" htmlFor="rain-mm">
+                Millimetres of rain
+              </label>
+              <input
+                id="rain-mm"
+                className="auth-input"
+                type="number"
+                min={0}
+                step="0.1"
+                placeholder="e.g. 12"
+                value={rainMmRaw}
+                onChange={(event) => setRainMmRaw(event.target.value)}
+                autoFocus
+              />
+
+              <div className="actions-date-row">
+                <label className="auth-label" htmlFor="rain-end-date">
+                  Date
+                </label>
+                <input
+                  id="rain-end-date"
+                  className="auth-input"
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="field-action-bar actions-details-bar">
+              <button
+                type="button"
+                className="btn btn-primary field-add-btn"
+                onClick={() => void handleSaveRain()}
+                disabled={saving || !rainMmValid}
+              >
+                {saving
+                  ? 'Logging rain...'
+                  : `Log rain across ${fields.length} ${fields.length === 1 ? 'field' : 'fields'}`}
+              </button>
+            </div>
+          </>
+        )
       ) : null}
 
       {saveError ? (
@@ -3852,19 +4180,18 @@ export default function App() {
 
     setFarmerNameInput(storedFarmer.name);
 
-    supabase
-      .rpc('get_farmer', { input_farmer_id: storedFarmer.id })
+    fetchFarmerById(storedFarmer.id)
       .then(({ data, error }) => {
         if (!mounted) return;
 
         if (error) {
           clearStoredFarmer();
-          setFarmerError(error.message);
+          setFarmerError(error);
           setAppState('signed-out');
           return;
         }
 
-        const farmer = (data as RpcFarmerRow[] | null)?.[0];
+        const farmer = data;
         if (!farmer) {
           clearStoredFarmer();
           setAppState('signed-out');
@@ -3939,18 +4266,15 @@ export default function App() {
     setFarmerError(null);
     setFarmerMessage(null);
 
-    const { data, error } = await supabase.rpc('upsert_farmer', {
-      input_name: farmerNameInput.trim(),
-    });
+    const { data: farmer, error } = await upsertFarmerByName(farmerNameInput);
 
     setSavingFarmer(false);
 
     if (error) {
-      setFarmerError(error.message);
+      setFarmerError(error);
       return;
     }
 
-    const farmer = (data as RpcFarmerRow[] | null)?.[0];
     if (!farmer) {
       setFarmerError('Farmer profile could not be created.');
       return;

@@ -1,0 +1,12 @@
+drop function if exists public.get_my_fields();
+drop function if exists public.create_field(text, jsonb);
+drop function if exists public.upsert_farmer(text);
+drop function if exists public.get_farmer(uuid);
+drop function if exists public.get_fields_for_farmer(uuid);
+drop function if exists public.create_field(uuid, text, jsonb);
+drop function if exists public.create_field(uuid, text, jsonb, text, text);
+drop function if exists public.create_field(uuid, text, jsonb, text, integer);
+drop function if exists public.update_field(uuid, uuid, text, integer);
+drop function if exists public.delete_field(uuid, uuid);
+drop function if exists public.log_action(uuid, uuid, date, integer, numeric, integer);
+drop function if exists public.log_action(uuid, uuid, date, integer, numeric, integer, integer, integer);

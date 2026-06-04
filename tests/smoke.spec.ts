@@ -23,19 +23,23 @@ async function seedEditableField() {
   const client = createClient(supabaseUrl, supabasePublishableKey);
   const suffix = randomUUID().slice(0, 8);
   const farmerName = `Edit Farmer ${suffix}`;
+  const normalizedName = farmerName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '.');
 
-  const { data: farmerRows, error: farmerError } = await client.rpc('upsert_farmer', {
-    input_name: farmerName,
-  });
+  const { data: farmer, error: farmerError } = await client
+    .from('farmers')
+    .insert({ name: farmerName, normalized_name: normalizedName })
+    .select('id, name')
+    .single();
   if (farmerError) {
     throw farmerError;
   }
 
-  const farmer = (farmerRows as Array<{ id: string; name: string }>)[0];
-  const { data: fieldId, error: fieldError } = await client.rpc('create_field', {
-    input_farmer_id: farmer.id,
-    input_field_name: 'North Pivot',
-    input_boundary: {
+  const { data: field, error: fieldError } = await client
+    .from('fields')
+    .insert({
+      farmer_id: farmer.id,
+      field_name: 'North Pivot',
+      boundary: {
       type: 'Polygon',
       coordinates: [
         [
@@ -47,16 +51,18 @@ async function seedEditableField() {
         ],
       ],
     },
-    input_field_type: 'pivot',
-    input_pivot_angle_degrees: 90,
-  });
+      field_type: 'pivot',
+      pivot_angle_degrees: 90,
+    })
+    .select('id')
+    .single();
   if (fieldError) {
     throw fieldError;
   }
 
   return {
     farmerName,
-    fieldId: fieldId as string,
+    fieldId: field.id as string,
   };
 }
 
@@ -140,5 +146,5 @@ test('farmer can open and save the field edit screen', async ({ page }) => {
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
 
   await expect(page).toHaveURL(/\/fields$/);
-  await expect(page.getByText('Updated North Pivot Updated.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('article').getByText('North Pivot Updated', { exact: true })).toBeVisible();
 });

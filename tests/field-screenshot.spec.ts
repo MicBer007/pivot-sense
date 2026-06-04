@@ -23,9 +23,9 @@ test('capture add field flow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Add field' })).toBeVisible();
   await expect(page.getByTestId('mapbox-canvas')).toBeVisible();
   await page.getByLabel('Field name', { exact: true }).fill('North Pivot');
-  await expect(page.getByRole('button', { name: 'Circle mode', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Free mode', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Free mode', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Circle', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Custom', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Custom', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Confirm boundary', exact: true })).toBeVisible();
 
   const dir = resolve('screenshots');
